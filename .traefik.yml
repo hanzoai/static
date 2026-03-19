@@ -1,13 +1,12 @@
-displayName: Statiq
+displayName: Static
 type: middleware
-iconPath: .assets/icon.png
 
-import: github.com/hhftechnology/statiq
+import: github.com/hanzoai/static
 
-summary: 'A feature-rich static file server inside Traefik'
+summary: 'Static file server middleware for Hanzo Ingress'
 
 testData:
-  root: ./tmp/statiq-test/  # <-- Updated relative path
+  root: ./tmp/static-test/
   enableDirectoryListing: false
   indexFiles:
     - index.html
