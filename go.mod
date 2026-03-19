@@ -1,3 +1,3 @@
-module github.com/hhftechnology/statiq
+module github.com/hanzoai/static
 
-go 1.19
+go 1.22

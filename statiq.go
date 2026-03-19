@@ -1,13 +1,14 @@
-package statiq
+// Package static provides a static file server middleware for Hanzo Ingress.
+package static
 
 import (
 	"context"
 	"fmt"
 	"html/template"
+	"io"
 	"io/fs"
 	"mime"
 	"net/http"
-	"io"
 	"os"
 	"path"
 	"path/filepath"
@@ -16,27 +17,27 @@ import (
 	"time"
 )
 
-// Config the plugin configuration.
+// Config holds the static file server middleware configuration.
 type Config struct {
-	// Root directory to serve files from
+	// Root directory to serve files from.
 	Root string `json:"root,omitempty"`
 
-	// EnableDirectoryListing enables directory listing
+	// EnableDirectoryListing enables directory listing.
 	EnableDirectoryListing bool `json:"enableDirectoryListing,omitempty"`
 
-	// IndexFiles is a list of filenames to try when a directory is requested
+	// IndexFiles is a list of filenames to try when a directory is requested.
 	IndexFiles []string `json:"indexFiles,omitempty"`
 
-	// SPAMode redirects all not-found requests to a single page
+	// SPAMode redirects all not-found requests to a single page.
 	SPAMode bool `json:"spaMode,omitempty"`
 
-	// SPAIndex is the file to serve in SPA mode
+	// SPAIndex is the file to serve in SPA mode.
 	SPAIndex string `json:"spaIndex,omitempty"`
 
-	// ErrorPage404 is the path to a custom 404 error page
+	// ErrorPage404 is the path to a custom 404 error page.
 	ErrorPage404 string `json:"errorPage404,omitempty"`
 
-	// CacheControl sets cache control headers for static files
+	// CacheControl sets cache control headers for static files.
 	CacheControl map[string]string `json:"cacheControl,omitempty"`
 }
 
@@ -53,7 +54,7 @@ func CreateConfig() *Config {
 	}
 }
 
-// dirEntry represents a file or directory for the directory listing template
+// dirEntry represents a file or directory for the directory listing template.
 type dirEntry struct {
 	Name    string
 	Size    int64
@@ -62,14 +63,12 @@ type dirEntry struct {
 	IsDir   bool
 }
 
-// Initialize MIME types
 func init() {
-	// Register Go files as text/x-go to match standard behavior
 	mime.AddExtensionType(".go", "text/x-go")
 }
 
-// StatiqHandler is a custom file server handler
-type StatiqHandler struct {
+// Handler is a static file server handler.
+type Handler struct {
 	root                 http.FileSystem
 	rootPath             string
 	enableDirListing     bool
@@ -79,71 +78,67 @@ type StatiqHandler struct {
 	errorPage404         string
 	cacheControl         map[string]string
 	notFoundResponseCode int
+	name                 string
 }
 
-// New creates a new Statiq plugin.
-// New creates a new Statiq plugin.
-func New(_ context.Context, next http.Handler, config *Config, _ string) (http.Handler, error) {
-    // Ensure the root path is absolute
-    root, err := filepath.Abs(config.Root)
-    if err != nil {
-        return nil, fmt.Errorf("invalid root path: %w", err)
-    }
-	// Ensure the directory exists
-if _, err := os.Stat(root); os.IsNotExist(err) {
-    if err := os.MkdirAll(root, 0755); err != nil {
-        return nil, fmt.Errorf("failed to create root directory: %w", err)
-    }
-}
-    // Check if custom 404 page exists - also make this check optional
-    notFoundResponseCode := http.StatusNotFound
-    if config.ErrorPage404 != "" {
-        // We'll validate the error page at runtime instead of initialization time
-        notFoundResponseCode = http.StatusOK // We'll serve the error page with 200 OK
-    }
+// New creates a new static file server middleware.
+func New(_ context.Context, next http.Handler, config *Config, name string) (http.Handler, error) {
+	root, err := filepath.Abs(config.Root)
+	if err != nil {
+		return nil, fmt.Errorf("invalid root path: %w", err)
+	}
 
-    // Create a custom handler
-    handler := &StatiqHandler{
-        root:                 http.Dir(root),
-        rootPath:             root,
-        enableDirListing:     config.EnableDirectoryListing,
-        indexFiles:           config.IndexFiles,
-        spaMode:              config.SPAMode,
-        spaIndex:             config.SPAIndex,
-        errorPage404:         config.ErrorPage404,
-        cacheControl:         config.CacheControl,
-        notFoundResponseCode: notFoundResponseCode,
-    }
+	if _, err := os.Stat(root); os.IsNotExist(err) {
+		if err := os.MkdirAll(root, 0755); err != nil {
+			return nil, fmt.Errorf("failed to create root directory: %w", err)
+		}
+	}
 
-    // Return our custom handler
-    return handler, nil
+	notFoundResponseCode := http.StatusNotFound
+	if config.ErrorPage404 != "" {
+		notFoundResponseCode = http.StatusOK
+	}
+
+	return &Handler{
+		root:                 http.Dir(root),
+		rootPath:             root,
+		enableDirListing:     config.EnableDirectoryListing,
+		indexFiles:           config.IndexFiles,
+		spaMode:              config.SPAMode,
+		spaIndex:             config.SPAIndex,
+		errorPage404:         config.ErrorPage404,
+		cacheControl:         config.CacheControl,
+		notFoundResponseCode: notFoundResponseCode,
+		name:                 name,
+	}, nil
 }
-// ServeHTTP serves HTTP requests with static files
-func (h *StatiqHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	// Clean the path
+
+// GetTracingInformation returns the middleware name and type for observability.
+func (h *Handler) GetTracingInformation() (string, string) {
+	return h.name, "Static"
+}
+
+// ServeHTTP serves HTTP requests with static files.
+func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	upath := r.URL.Path
 	if !strings.HasPrefix(upath, "/") {
 		upath = "/" + upath
 	}
-	
-	// Try to open the file
+
 	f, err := h.root.Open(upath)
 	if err != nil {
-		// Handle not found
 		if os.IsNotExist(err) {
 			if h.spaMode {
-				// In SPA mode, serve the SPA index file
-				h.serveFile(w, r, filepath.Join(string(h.rootPath), h.spaIndex))
+				h.serveFile(w, r, filepath.Join(h.rootPath, h.spaIndex))
 				return
 			}
-			
+
 			if h.errorPage404 != "" {
-				// Serve custom 404 page
 				w.WriteHeader(h.notFoundResponseCode)
-				h.serveFile(w, r, filepath.Join(string(h.rootPath), h.errorPage404))
+				h.serveFile(w, r, filepath.Join(h.rootPath, h.errorPage404))
 				return
 			}
-			
+
 			http.NotFound(w, r)
 			return
 		}
@@ -152,25 +147,21 @@ func (h *StatiqHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	defer f.Close()
 
-	// Get file info
 	d, err := f.Stat()
 	if err != nil {
 		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 		return
 	}
 
-	// Handle directory
 	if d.IsDir() {
-		// Redirect if the directory name doesn't end in a slash
 		url := r.URL.Path
 		if len(url) == 0 || url[len(url)-1] != '/' {
 			localRedirect(w, r, url+"/")
 			return
 		}
 
-		// Try to serve an index file
 		for _, index := range h.indexFiles {
-			indexPath := path.Join(upath, index)  // Use path.Join for URL paths
+			indexPath := path.Join(upath, index)
 			indexFile, err := h.root.Open(indexPath)
 			if err == nil {
 				indexFile.Close()
@@ -179,26 +170,22 @@ func (h *StatiqHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
-		// If directory listing is disabled, return 404
 		if !h.enableDirListing {
 			if h.errorPage404 != "" {
 				w.WriteHeader(h.notFoundResponseCode)
-				h.serveFile(w, r, filepath.Join(string(h.rootPath), h.errorPage404))
+				h.serveFile(w, r, filepath.Join(h.rootPath, h.errorPage404))
 				return
 			}
 			http.NotFound(w, r)
 			return
 		}
 
-		// Serve directory listing
 		h.serveDirectoryListing(w, r, f, d)
 		return
 	}
 
-	// Set cache control headers if configured
 	h.setCacheHeaders(w, r, d)
 
-	// Get content type based on file extension
 	name := d.Name()
 	ext := filepath.Ext(name)
 	contentType := mime.TypeByExtension(ext)
@@ -206,20 +193,16 @@ func (h *StatiqHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", contentType)
 	}
 
-	// Serve the file
 	http.ServeContent(w, r, d.Name(), d.ModTime(), f.(io.ReadSeeker))
 }
 
-// serveDirectoryListing generates and serves an HTML directory listing
-func (h *StatiqHandler) serveDirectoryListing(w http.ResponseWriter, r *http.Request, f http.File, d fs.FileInfo) {
-	// List directory contents
+func (h *Handler) serveDirectoryListing(w http.ResponseWriter, r *http.Request, f http.File, d fs.FileInfo) {
 	dirs, err := f.Readdir(-1)
 	if err != nil {
 		http.Error(w, "Error reading directory", http.StatusInternalServerError)
 		return
 	}
-	
-	// Sort directories first, then by name
+
 	sort.Slice(dirs, func(i, j int) bool {
 		if dirs[i].IsDir() && !dirs[j].IsDir() {
 			return true
@@ -229,8 +212,7 @@ func (h *StatiqHandler) serveDirectoryListing(w http.ResponseWriter, r *http.Req
 		}
 		return dirs[i].Name() < dirs[j].Name()
 	})
-	
-	// Create slice of dirEntry for the template
+
 	entries := make([]dirEntry, len(dirs))
 	for i, entry := range dirs {
 		entries[i] = dirEntry{
@@ -241,11 +223,9 @@ func (h *StatiqHandler) serveDirectoryListing(w http.ResponseWriter, r *http.Req
 			IsDir:   entry.IsDir(),
 		}
 	}
-	
-	// Set content type and render the HTML
+
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	
-	// Simple directory listing template
+
 	tmpl := template.Must(template.New("dirlist").Parse(`
 <!DOCTYPE html>
 <html>
@@ -257,7 +237,7 @@ func (h *StatiqHandler) serveDirectoryListing(w http.ResponseWriter, r *http.Req
         table { border-collapse: collapse; width: 100%; }
         th, td { text-align: left; padding: 8px; }
         tr:nth-child(even) { background-color: #f2f2f2; }
-        th { background-color: #4CAF50; color: white; }
+        th { background-color: #333; color: white; }
         a { text-decoration: none; }
         a:hover { text-decoration: underline; }
     </style>
@@ -288,8 +268,7 @@ func (h *StatiqHandler) serveDirectoryListing(w http.ResponseWriter, r *http.Req
 </body>
 </html>
 `))
-	
-	// Execute the template
+
 	data := struct {
 		Path  string
 		Files []dirEntry
@@ -297,62 +276,51 @@ func (h *StatiqHandler) serveDirectoryListing(w http.ResponseWriter, r *http.Req
 		Path:  r.URL.Path,
 		Files: entries,
 	}
-	
-	err = tmpl.Execute(w, data)
-	if err != nil {
+
+	if err = tmpl.Execute(w, data); err != nil {
 		http.Error(w, "Error rendering directory listing", http.StatusInternalServerError)
 	}
 }
 
-// setCacheHeaders sets cache control headers based on file extension
-func (h *StatiqHandler) setCacheHeaders(w http.ResponseWriter, r *http.Request, d fs.FileInfo) {
-	// Get file extension
+func (h *Handler) setCacheHeaders(w http.ResponseWriter, _ *http.Request, d fs.FileInfo) {
 	ext := filepath.Ext(d.Name())
-	
-	// Check if we have a cache control setting for this extension
+
 	if maxAge, ok := h.cacheControl[ext]; ok {
 		w.Header().Set("Cache-Control", maxAge)
 	} else if maxAge, ok := h.cacheControl["*"]; ok {
-		// Use default setting if available
 		w.Header().Set("Cache-Control", maxAge)
 	} else {
-		// Default cache control
-		w.Header().Set("Cache-Control", "max-age=86400") // 24 hours
+		w.Header().Set("Cache-Control", "max-age=86400")
 	}
-	
-	// Set Last-Modified header
+
 	w.Header().Set("Last-Modified", d.ModTime().UTC().Format(http.TimeFormat))
 }
 
-// serveFile serves a file directly from the filesystem
-// Change the parameter name
-func (h *StatiqHandler) serveFile(w http.ResponseWriter, r *http.Request, filePath string) {
-    f, err := os.Open(filePath)
-    if err != nil {
-        http.Error(w, "Internal Server Error", http.StatusInternalServerError)
-        return
-    }
-    defer f.Close()
+func (h *Handler) serveFile(w http.ResponseWriter, r *http.Request, filePath string) {
+	f, err := os.Open(filePath)
+	if err != nil {
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		return
+	}
+	defer f.Close()
 
-    d, err := f.Stat()
-    if err != nil {
-        http.Error(w, "Internal Server Error", http.StatusInternalServerError)
-        return
-    }
+	d, err := f.Stat()
+	if err != nil {
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		return
+	}
 
-    h.setCacheHeaders(w, r, d)
-    
-    // Now filepath refers to the package, not the parameter
-    ext := filepath.Ext(d.Name())
-    contentType := mime.TypeByExtension(ext)
-    if contentType != "" {
-        w.Header().Set("Content-Type", contentType)
-    }
-    
-    http.ServeContent(w, r, d.Name(), d.ModTime(), f)
+	h.setCacheHeaders(w, r, d)
+
+	ext := filepath.Ext(d.Name())
+	contentType := mime.TypeByExtension(ext)
+	if contentType != "" {
+		w.Header().Set("Content-Type", contentType)
+	}
+
+	http.ServeContent(w, r, d.Name(), d.ModTime(), f)
 }
 
-// localRedirect gives a Moved Permanently response
 func localRedirect(w http.ResponseWriter, r *http.Request, newPath string) {
 	if q := r.URL.RawQuery; q != "" {
 		newPath += "?" + q

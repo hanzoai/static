@@ -1,132 +1,106 @@
-<div align="center" width="100%">
-    <h1> Statiq - Webserver Plugin for Traefik v3</h1>
-    <img width="auto" src=".assets/banner.png">
-    <a target="_blank" href="https://GitHub.com/hhftechnology/tlsguard/graphs/contributors/"><img src="https://img.shields.io/github/contributors/hhftechnology/tlsguard.svg" /></a><br>
-    <a target="_blank" href="https://GitHub.com/hhftechnology/statiq/commits/"><img src="https://img.shields.io/github/last-commit/hhftechnology/statiq.svg" /></a>
-    <a target="_blank" href="https://GitHub.com/hhftechnology/statiq/issues/"><img src="https://img.shields.io/github/issues/hhftechnology/statiq.svg" /></a>
-    <a target="_blank" href="https://github.com/hhftechnology/statiq/issues?q=is%3Aissue+is%3Aclosed"><img src="https://img.shields.io/github/issues-closed/hhftechnology/statiq.svg" /></a><br>
-        <a target="_blank" href="https://github.com/hhftechnology/statiq/stargazers"><img src="https://img.shields.io/github/stars/hhftechnology/statiq.svg?style=social&label=Star" /></a>
-    <a target="_blank" href="https://github.com/hhftechnology/statiq/network/members"><img src="https://img.shields.io/github/forks/hhftechnology/statiq.svg?style=social&label=Fork" /></a>
-    <a target="_blank" href="https://github.com/hhftechnology/statiq/watchers"><img src="https://img.shields.io/github/watchers/hhftechnology/statiq.svg?style=social&label=Watch" /></a><br>
-</div>
+# Static
 
-<div align="center" width="100%">
-    <p>This is a plugin for [Traefik](https://traefik.io) to build a **feature-rich static file server** as a middleware.</p>
-    <a target="_blank" href="https://github.com/hhftechnology/statiq"><img src="https://img.shields.io/badge/maintainer-hhftechnology-orange" /></a>
-</div>
+Static file server middleware for [Hanzo Ingress](https://github.com/hanzoai/ingress) (Traefik v3).
 
-## 📝 Forums
-
-[See the forums for further discussion here](https://forum.hhf.technology/)
-Make Traefik a powerful static file server!
+Serves static files, SPAs, directory listings, and custom error pages directly from the ingress layer — no backend required.
 
 ## Features
 
-- **Basic file serving**: Serves static files from a configured directory
-- **Directory listing control**: Enable or disable directory browsing
-- **Custom index files**: Configure which files should be used as directory index
-- **SPA mode**: Support for Single Page Applications by redirecting 404s to index file
-- **Custom error pages**: Configure custom error pages for 404 errors
-- **Cache control**: Set cache control headers based on file extensions
-- **Full Traefik v3 compatibility**: Optimized for the latest Traefik version
+- Static file serving from any directory
+- SPA mode (fallback to index for client-side routing)
+- Custom index files per directory
+- Directory listing with sortable HTML output
+- Custom 404 error pages
+- Cache-Control headers by file extension
+- Zero dependencies (pure Go stdlib)
 
-## Configuration Options
+## Weight
+
+~360 lines of Go. No external dependencies. Loaded via Yaegi interpreter at runtime — adds negligible overhead to ingress startup.
+
+## Configuration
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
 | `root` | String | `.` | Root directory to serve files from |
-| `enableDirectoryListing` | Boolean | `false` | Whether to enable directory listing |
-| `indexFiles` | Array | `["index.html", "index.htm"]` | List of filenames to try when a directory is requested |
-| `spaMode` | Boolean | `false` | Redirects all not-found requests to a single page |
+| `enableDirectoryListing` | Boolean | `false` | Enable directory browsing |
+| `indexFiles` | Array | `["index.html", "index.htm"]` | Index filenames to try for directories |
+| `spaMode` | Boolean | `false` | Redirect all 404s to SPA index |
 | `spaIndex` | String | `index.html` | File to serve in SPA mode |
-| `errorPage404` | String | `""` | Path to a custom 404 error page (relative to root) |
-| `cacheControl` | Map | `{}` | Map of file extensions to cache control values |
+| `errorPage404` | String | `""` | Custom 404 page (relative to root) |
+| `cacheControl` | Map | `{}` | File extension to Cache-Control value map |
 
 ## Usage
 
-### Basic Configuration
+### Embedded in Hanzo Ingress (local plugin)
 
-Here is an example of a file provider dynamic configuration (given here in
-YAML), for basic static file serving:
+Add to ingress static config:
 
 ```yaml
-# Dynamic configuration
-http:
-  routers:
-    my-statiq-router:
-      rule: host(`statiq.localhost`)
-      service: noop@internal # required
-      middlewares:
-        - statiq
-
-  middlewares:
-    statiq:
-      plugin:
-        statiq:
-          root: "./test_assets/sample_site/"
+experimental:
+  localPlugins:
+    static:
+      moduleName: github.com/hanzoai/static
 ```
 
-### Advanced Configuration
+Place the plugin source in `plugins-local/src/github.com/hanzoai/static/`.
 
-Here's an example with more advanced features enabled:
+Then use in dynamic config:
 
 ```yaml
-# Dynamic configuration with advanced features
 http:
   routers:
-    my-spa-router:
-      rule: host(`spa.localhost`)
+    site:
+      rule: Host(`example.com`)
       service: noop@internal
       middlewares:
-        - statiq-advanced
+        - static-files
 
   middlewares:
-    statiq-advanced:
+    static-files:
       plugin:
-        statiq:
-          root: "./test_assets/sample_site/"
-          spaMode: true
-          spaIndex: "index.html"
-          errorPage404: "error/404.html"
-          enableDirectoryListing: false
-          indexFiles:
-            - "index.html"
-            - "default.htm"
-          cacheControl:
-            ".html": "max-age=3600"
-            ".css": "max-age=86400"
-            ".js": "max-age=86400"
-            ".png": "max-age=604800"
-            ".jpg": "max-age=604800"
-            "*": "max-age=3600"
+        static:
+          root: /var/www/html
 ```
 
-## Local Testing
+### Remote plugin
 
-There is a `docker compose.yml` file to test the plugin locally:
+```yaml
+experimental:
+  plugins:
+    static:
+      moduleName: github.com/hanzoai/static
+      version: v0.1.0
+```
+
+### SPA mode (React/Vue/Angular)
+
+```yaml
+http:
+  middlewares:
+    spa:
+      plugin:
+        static:
+          root: /var/www/app
+          spaMode: true
+          spaIndex: index.html
+          cacheControl:
+            ".html": "no-cache"
+            ".js": "max-age=31536000"
+            ".css": "max-age=31536000"
+            "*": "max-age=86400"
+```
+
+## Development
 
 ```bash
-docker compose up -d
+make lint    # golangci-lint
+make test    # go test -v -cover
 ```
 
-Then, you can go to [http://statiq.localhost](http://statiq.localhost) to see the
-result.
+## License
 
-## Use Cases
+Apache 2.0 — see [LICENSE](LICENSE).
 
-### Static Website Hosting
-
-Perfect for hosting simple static websites with HTML, CSS, and JavaScript files.
-
-### Single Page Application (SPA) Hosting
-
-Using the `spaMode` option, you can easily host React, Vue, or Angular applications 
-that use client-side routing.
-
-### API Documentation
-
-Host API documentation generated by tools like Swagger or Redoc directly from Traefik.
-
-### Documentation Sites
-
-Serve markdown-based documentation sites or wikis seamlessly.
+Copyright 2025-2026 Hanzo AI Inc.
+Based on [hhftechnology/statiq](https://github.com/hhftechnology/statiq) (Apache 2.0).
