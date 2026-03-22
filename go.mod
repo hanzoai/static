@@ -1,3 +1,3 @@
 module github.com/hanzoai/static
 
-go 1.22
+go 1.26.1
