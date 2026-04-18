@@ -2,7 +2,7 @@ module github.com/hanzoai/static
 
 go 1.26.1
 
-require github.com/hanzoai/storage-go v1.0.0
+require github.com/hanzoai/s3-go v0.0.0-20260418023308-ca392ddf6b9d
 
 require (
 	github.com/davecgh/go-spew v1.1.1 // indirect
