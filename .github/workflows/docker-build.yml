@@ -9,4 +9,5 @@ jobs:
   build:
     uses: hanzoai/.github/.github/workflows/docker-build.yml@main
     with:
-      image_name: static
+      image: ghcr.io/hanzoai/static
+    secrets: inherit
