@@ -10,8 +10,8 @@ import (
 	"strings"
 	"time"
 
-	storage "github.com/hanzoai/s3-go"
-	"github.com/hanzoai/s3-go/pkg/credentials"
+	s3 "github.com/hanzos3/go-sdk"
+	"github.com/hanzos3/go-sdk/pkg/credentials"
 )
 
 // S3Config holds S3 backend configuration.
@@ -25,20 +25,20 @@ type S3Config struct {
 	UseSSL    bool   `json:"useSSL,omitempty"`    // Use HTTPS
 }
 
-// S3FS implements http.FileSystem backed by S3-compatible storage.
+// S3FS implements http.FileSystem backed by S3-compatible s3.
 type S3FS struct {
-	client *storage.Client
+	client *s3.Client
 	bucket string
 	prefix string
 }
 
-// NewS3FS creates an http.FileSystem backed by S3-compatible storage.
+// NewS3FS creates an http.FileSystem backed by S3-compatible s3.
 func NewS3FS(_ context.Context, cfg S3Config) (*S3FS, error) {
 	endpoint := cfg.Endpoint
 	endpoint = strings.TrimPrefix(endpoint, "https://")
 	endpoint = strings.TrimPrefix(endpoint, "http://")
 
-	client, err := storage.New(endpoint, &storage.Options{
+	client, err := s3.New(endpoint, &s3.Options{
 		Creds:  credentials.NewStaticV4(cfg.AccessKey, cfg.SecretKey, ""),
 		Secure: cfg.UseSSL,
 		Region: cfg.Region,
@@ -67,7 +67,7 @@ func (s *S3FS) Open(name string) (http.File, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	obj, err := s.client.GetObject(ctx, s.bucket, key, storage.GetObjectOptions{})
+	obj, err := s.client.GetObject(ctx, s.bucket, key, s3.GetObjectOptions{})
 	if err != nil {
 		return nil, &os.PathError{Op: "open", Path: name, Err: os.ErrNotExist}
 	}
