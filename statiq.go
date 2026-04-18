@@ -19,8 +19,11 @@ import (
 
 // Config holds the static file server middleware configuration.
 type Config struct {
-	// Root directory to serve files from.
+	// Root directory to serve files from (local filesystem).
 	Root string `json:"root,omitempty"`
+
+	// S3 backend configuration (if set, takes precedence over Root).
+	S3 *S3Config `json:"s3,omitempty"`
 
 	// EnableDirectoryListing enables directory listing.
 	EnableDirectoryListing bool `json:"enableDirectoryListing,omitempty"`
@@ -82,16 +85,29 @@ type Handler struct {
 }
 
 // New creates a new static file server middleware.
-func New(_ context.Context, next http.Handler, config *Config, name string) (http.Handler, error) {
-	root, err := filepath.Abs(config.Root)
-	if err != nil {
-		return nil, fmt.Errorf("invalid root path: %w", err)
-	}
+func New(ctx context.Context, next http.Handler, config *Config, name string) (http.Handler, error) {
+	var rootFS http.FileSystem
+	var rootPath string
 
-	if _, err := os.Stat(root); os.IsNotExist(err) {
-		if err := os.MkdirAll(root, 0755); err != nil {
-			return nil, fmt.Errorf("failed to create root directory: %w", err)
+	if config.S3 != nil && config.S3.Bucket != "" {
+		s3fs, err := NewS3FS(ctx, *config.S3)
+		if err != nil {
+			return nil, fmt.Errorf("s3 backend: %w", err)
 		}
+		rootFS = s3fs
+		rootPath = "s3://" + config.S3.Bucket
+	} else {
+		root, err := filepath.Abs(config.Root)
+		if err != nil {
+			return nil, fmt.Errorf("invalid root path: %w", err)
+		}
+		if _, err := os.Stat(root); os.IsNotExist(err) {
+			if err := os.MkdirAll(root, 0755); err != nil {
+				return nil, fmt.Errorf("failed to create root directory: %w", err)
+			}
+		}
+		rootFS = http.Dir(root)
+		rootPath = root
 	}
 
 	notFoundResponseCode := http.StatusNotFound
@@ -100,8 +116,8 @@ func New(_ context.Context, next http.Handler, config *Config, name string) (htt
 	}
 
 	return &Handler{
-		root:                 http.Dir(root),
-		rootPath:             root,
+		root:                 rootFS,
+		rootPath:             rootPath,
 		enableDirListing:     config.EnableDirectoryListing,
 		indexFiles:           config.IndexFiles,
 		spaMode:              config.SPAMode,
