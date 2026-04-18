@@ -10,8 +10,8 @@ import (
 	"strings"
 	"time"
 
-	storage "github.com/hanzoai/storage-go"
-	"github.com/hanzoai/storage-go/pkg/credentials"
+	storage "github.com/hanzoai/s3-go"
+	"github.com/hanzoai/s3-go/pkg/credentials"
 )
 
 // S3Config holds S3 backend configuration.
