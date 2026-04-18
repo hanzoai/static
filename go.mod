@@ -25,3 +25,8 @@ require (
 	golang.org/x/text v0.32.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
+
+replace (
+	github.com/minio/crc64nvme => github.com/hanzos3/crc64nvme v1.1.1
+	github.com/minio/md5-simd => github.com/hanzos3/md5-simd v1.1.2
+)
