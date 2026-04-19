@@ -7,6 +7,9 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"os/signal"
+	"syscall"
+	"time"
 
 	"github.com/hanzoai/static"
 )
@@ -18,7 +21,7 @@ func securityHeaders(next http.Handler) http.Handler {
 		w.Header().Set("X-Frame-Options", "DENY")
 		w.Header().Set("Referrer-Policy", "strict-origin-when-cross-origin")
 		w.Header().Set("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
-		w.Header().Set("Content-Security-Policy", "default-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self' data:; img-src 'self' data: https:; script-src 'self' 'unsafe-inline'")
+		w.Header().Set("Content-Security-Policy", "default-src 'none'; img-src 'self'; font-src 'self'; style-src 'self'")
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		w.Header().Set("Access-Control-Allow-Methods", "GET, HEAD, OPTIONS")
 		next.ServeHTTP(w, r)
@@ -59,6 +62,7 @@ func main() {
 			AccessKey: os.Getenv("AWS_ACCESS_KEY_ID"),
 			SecretKey: os.Getenv("AWS_SECRET_ACCESS_KEY"),
 			Prefix:    *s3Prefix,
+			UseSSL:    os.Getenv("S3_USE_SSL") == "true",
 		}
 	}
 
@@ -75,7 +79,37 @@ func main() {
 		source = fmt.Sprintf("s3://%s/%s", *s3Bucket, *s3Prefix)
 	}
 
+	mux := http.NewServeMux()
+	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	mux.Handle("/", securityHeaders(handler))
+
 	addr := fmt.Sprintf(":%d", *port)
+	srv := &http.Server{
+		Addr:           addr,
+		Handler:        mux,
+		ReadTimeout:    10 * time.Second,
+		WriteTimeout:   30 * time.Second,
+		IdleTimeout:    60 * time.Second,
+		MaxHeaderBytes: 1 << 20,
+	}
+
 	log.Printf("static: serving %s on %s (spa=%v)", source, addr, *spa)
-	log.Fatal(http.ListenAndServe(addr, securityHeaders(handler)))
+
+	done := make(chan os.Signal, 1)
+	signal.Notify(done, syscall.SIGINT, syscall.SIGTERM)
+	go func() {
+		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Fatalf("static: %v", err)
+		}
+	}()
+
+	<-done
+	log.Print("static: shutting down")
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := srv.Shutdown(ctx); err != nil {
+		log.Fatalf("static: shutdown: %v", err)
+	}
 }

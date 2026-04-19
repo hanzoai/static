@@ -3,6 +3,7 @@ package static
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"io"
 	"io/fs"
 	"net/http"
@@ -13,6 +14,8 @@ import (
 	s3 "github.com/hanzos3/go-sdk"
 	"github.com/hanzos3/go-sdk/pkg/credentials"
 )
+
+const maxObjectSize = 50 << 20 // 50 MB
 
 // S3Config holds S3 backend configuration.
 type S3Config struct {
@@ -78,10 +81,15 @@ func (s *S3FS) Open(name string) (http.File, error) {
 		return nil, &os.PathError{Op: "open", Path: name, Err: os.ErrNotExist}
 	}
 
-	data, err := io.ReadAll(obj)
+	if info.Size > maxObjectSize {
+		obj.Close()
+		return nil, &os.PathError{Op: "open", Path: name, Err: fmt.Errorf("object too large: %d bytes", info.Size)}
+	}
+
+	data, err := io.ReadAll(io.LimitReader(obj, maxObjectSize+1))
 	obj.Close()
 	if err != nil {
-		return nil, err
+		return nil, &os.PathError{Op: "read", Path: name, Err: err}
 	}
 
 	return &s3File{
