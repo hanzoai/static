@@ -18,14 +18,25 @@ import (
 	"github.com/hanzoai/static"
 )
 
+// securityHeaders stamps a baseline set of security headers on every
+// response. The Permissions-Policy and Content-Security-Policy values
+// are env-overridable for SPAs that legitimately need camera/microphone
+// access (biometric KYC, video chat) or a looser CSP (inline scripts,
+// data: URIs). Defaults are still locked-down; only an explicit
+// HANZO_STATIC_PERMISSIONS_POLICY / HANZO_STATIC_CSP override widens
+// them.
 func securityHeaders(next http.Handler) http.Handler {
+	permissions := envOr("HANZO_STATIC_PERMISSIONS_POLICY",
+		"camera=(), microphone=(), geolocation=()")
+	csp := envOr("HANZO_STATIC_CSP",
+		"default-src 'none'; img-src 'self'; font-src 'self'; style-src 'self'")
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("X-Frame-Options", "DENY")
 		w.Header().Set("Referrer-Policy", "strict-origin-when-cross-origin")
-		w.Header().Set("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
-		w.Header().Set("Content-Security-Policy", "default-src 'none'; img-src 'self'; font-src 'self'; style-src 'self'")
+		w.Header().Set("Permissions-Policy", permissions)
+		w.Header().Set("Content-Security-Policy", csp)
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		w.Header().Set("Access-Control-Allow-Methods", "GET, HEAD, OPTIONS")
 		next.ServeHTTP(w, r)
