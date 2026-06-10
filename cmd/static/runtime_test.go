@@ -31,8 +31,8 @@ func TestParseValue(t *testing.T) {
 	if parseValue("false") != false {
 		t.Error("false should parse to bool false")
 	}
-	if parseValue("8675310") != int64(8675310) {
-		t.Error("8675310 should parse to int64")
+	if parseValue("42") != int64(42) {
+		t.Error("42 should parse to int64")
 	}
 	if parseValue("https://api.test.example.com") != "https://api.test.example.com" {
 		t.Error("URL should stay string")
@@ -52,7 +52,7 @@ func TestWriteRuntimeConfig(t *testing.T) {
 
 	t.Setenv("SPA_API_HOST", "https://api.test.example.com")
 	t.Setenv("SPA_IAM_HOST", "https://iam.test.example.com")
-	t.Setenv("SPA_CHAIN_ID", "8675310")
+	t.Setenv("SPA_CHAIN_ID", "1")
 	t.Setenv("SPA_ENV", "test")
 
 	if err := writeRuntimeConfig(dir); err != nil {
@@ -75,7 +75,7 @@ func TestWriteRuntimeConfig(t *testing.T) {
 		t.Errorf("iamHost = %v", got["iamHost"])
 	}
 	// JSON decodes numbers as float64 unless told otherwise.
-	if got["chainId"].(float64) != 8675310 {
+	if got["chainId"].(float64) != 1 {
 		t.Errorf("chainId = %v", got["chainId"])
 	}
 	if got["env"] != "test" {
