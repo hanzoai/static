@@ -1,4 +1,4 @@
-# static — AI Assistant Context
+# static
 
 Static file server for Hanzo Ingress (Traefik v3) and standalone SPA runtime.
 
