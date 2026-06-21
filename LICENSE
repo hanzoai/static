@@ -1,3 +1,10 @@
+Copyright (c) 2020 Traefik Labs (formerly Containous)
+Copyright (c) 2025-2026 Hanzo AI, Inc.
+
+This software is derived from the Traefik plugin scaffold
+(github.com/traefik/plugindemo) and is distributed under the Apache
+License, Version 2.0. The full license text follows.
+
                                  Apache License
                            Version 2.0, January 2004
                         http://www.apache.org/licenses/
