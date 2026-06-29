@@ -1,3 +1,5 @@
+<p align="center"><img src=".github/hero.svg" alt="static" width="880"></p>
+
 # Static
 
 Static file server middleware for [Hanzo Ingress](https://github.com/hanzoai/ingress) (Traefik v3).
