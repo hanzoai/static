@@ -142,6 +142,15 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	f, err := h.root.Open(upath)
+	// Clean-URL fallback: an extensionless miss serves its ".html" sibling in
+	// place (no redirect — the clean URL is canonical). This is the static-export
+	// contract every exporter (Next, Astro, …) and host (Pages) shares:
+	// /docs/flags is stored as docs/flags.html.
+	if err != nil && os.IsNotExist(err) && !strings.HasSuffix(upath, "/") && path.Ext(upath) == "" {
+		if hf, herr := h.root.Open(upath + ".html"); herr == nil {
+			f, err = hf, nil
+		}
+	}
 	if err != nil {
 		if os.IsNotExist(err) {
 			if h.spaMode {

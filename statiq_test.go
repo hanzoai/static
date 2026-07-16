@@ -372,3 +372,66 @@ func next(t *testing.T) http.Handler {
 		t.Fatal("next handler was called unexpectedly")
 	})
 }
+
+func TestCleanURLHTMLFallback(t *testing.T) {
+	t.Parallel()
+
+	tempDir, err := os.MkdirTemp("", "static-clean-url")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	if err := os.MkdirAll(filepath.Join(tempDir, "docs"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(tempDir, "docs", "flags.html"), []byte("<h1>flags</h1>"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := static.CreateConfig()
+	cfg.Root = tempDir
+
+	handler, err := static.New(context.Background(), next(t), cfg, "static")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// The extensionless clean URL serves its .html sibling IN PLACE (200, no
+	// redirect) — the static-export contract (Next/Pages: /docs/flags →
+	// docs/flags.html).
+	recorder := httptest.NewRecorder()
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, "http://localhost/docs/flags", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler.ServeHTTP(recorder, req)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("clean URL: expected 200, got %d", recorder.Code)
+	}
+	if !strings.Contains(recorder.Body.String(), "<h1>flags</h1>") {
+		t.Fatalf("clean URL served wrong body: %q", recorder.Body.String())
+	}
+
+	// A genuinely missing extensionless path still 404s.
+	recorder = httptest.NewRecorder()
+	req, err = http.NewRequestWithContext(context.Background(), http.MethodGet, "http://localhost/docs/ghost", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler.ServeHTTP(recorder, req)
+	if recorder.Code != http.StatusNotFound {
+		t.Fatalf("missing path: expected 404, got %d", recorder.Code)
+	}
+
+	// A path WITH an extension never triggers the fallback.
+	recorder = httptest.NewRecorder()
+	req, err = http.NewRequestWithContext(context.Background(), http.MethodGet, "http://localhost/docs/flags.png", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler.ServeHTTP(recorder, req)
+	if recorder.Code != http.StatusNotFound {
+		t.Fatalf("extension miss: expected 404, got %d", recorder.Code)
+	}
+}
