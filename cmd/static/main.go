@@ -150,6 +150,7 @@ func main() {
 	port := flag.Int("port", 3000, "listen port")
 	root := flag.String("root", "/public", "root directory (local filesystem)")
 	spa := flag.Bool("spa", false, "SPA mode (serve index.html for 404s)")
+	page404 := flag.String("404", "", "custom 404 page, relative to root (e.g. 404.html)")
 
 	// S3 backend flags (override local filesystem when S3_BUCKET is set)
 	s3Endpoint := flag.String("s3-endpoint", envOr("S3_ENDPOINT", ""), "S3 endpoint URL")
@@ -167,10 +168,11 @@ func main() {
 	}
 
 	cfg := &static.Config{
-		Root:       *root,
-		IndexFiles: []string{"index.html"},
-		SPAMode:    *spa,
-		SPAIndex:   "index.html",
+		Root:         *root,
+		IndexFiles:   []string{"index.html"},
+		SPAMode:      *spa,
+		SPAIndex:     "index.html",
+		ErrorPage404: *page404,
 	}
 
 	if *s3Bucket != "" {
