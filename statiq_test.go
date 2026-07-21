@@ -111,37 +111,24 @@ func TestIndexFiles(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, "http://localhost/subdir/", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
+	// A directory with an index serves its index IN PLACE (200) — no redirect to the
+	// explicit ".../custom.html" URL — for both the trailing-slash and the clean
+	// (slash-less) path. This is the clean-URL contract; a redirect here would be the
+	// needless second hop of /subdir → /subdir/ → /subdir/custom.html.
+	for _, reqPath := range []string{"/subdir/", "/subdir"} {
+		req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, "http://localhost"+reqPath, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		recorder := httptest.NewRecorder()
+		handler.ServeHTTP(recorder, req)
 
-	recorder := httptest.NewRecorder()
-	handler.ServeHTTP(recorder, req)
-
-	if recorder.Code != http.StatusMovedPermanently {
-		t.Errorf("Expected redirect for directory, got status code %d", recorder.Code)
-	}
-
-	location := recorder.Header().Get("Location")
-	if location != "/subdir/custom.html" {
-		t.Errorf("Expected redirect to /subdir/custom.html, got %s", location)
-	}
-
-	req, err = http.NewRequestWithContext(context.Background(), http.MethodGet, "http://localhost"+location, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	recorder = httptest.NewRecorder()
-	handler.ServeHTTP(recorder, req)
-
-	if recorder.Code != http.StatusOK {
-		t.Errorf("Expected 200 OK, got %d", recorder.Code)
-	}
-
-	if recorder.Body.String() != indexContent {
-		t.Errorf("Expected index content, got %s", recorder.Body.String())
+		if recorder.Code != http.StatusOK {
+			t.Errorf("%s: expected 200 (index served in place), got %d (Location=%q)", reqPath, recorder.Code, recorder.Header().Get("Location"))
+		}
+		if recorder.Body.String() != indexContent {
+			t.Errorf("%s: expected index content, got %q", reqPath, recorder.Body.String())
+		}
 	}
 }
 

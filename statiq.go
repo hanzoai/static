@@ -47,13 +47,13 @@ type Config struct {
 // CreateConfig creates the default plugin configuration.
 func CreateConfig() *Config {
 	return &Config{
-		Root:                  ".",
+		Root:                   ".",
 		EnableDirectoryListing: false,
-		IndexFiles:            []string{"index.html", "index.htm"},
-		SPAMode:               false,
-		SPAIndex:              "index.html",
-		ErrorPage404:          "",
-		CacheControl:          map[string]string{},
+		IndexFiles:             []string{"index.html", "index.htm"},
+		SPAMode:                false,
+		SPAIndex:               "index.html",
+		ErrorPage404:           "",
+		CacheControl:           map[string]string{},
 	}
 }
 
@@ -179,20 +179,28 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if d.IsDir() {
+		// Serve the directory's index IN PLACE — no redirect — for BOTH /pricing and
+		// /pricing/. This matches the clean-URL contract this server already applies to
+		// flat ".html" siblings above (the requested path is canonical). It also kills
+		// the old needless double redirect: a materialized directory index from a static
+		// export (/pricing → /pricing/ → /pricing/index.html) now resolves in ZERO
+		// redirects, and the internal "index.html" filename never leaks into the address
+		// bar. Static exports use absolute asset URLs, so serving at the slash-less path
+		// is safe.
+		for _, index := range h.indexFiles {
+			indexPath := path.Join(upath, index)
+			if indexFile, ierr := h.root.Open(indexPath); ierr == nil {
+				indexFile.Close()
+				h.serveFile(w, r, filepath.Join(h.rootPath, indexPath))
+				return
+			}
+		}
+
+		// No index file: canonicalize to a trailing slash, then list (or 404).
 		url := r.URL.Path
 		if len(url) == 0 || url[len(url)-1] != '/' {
 			localRedirect(w, r, url+"/")
 			return
-		}
-
-		for _, index := range h.indexFiles {
-			indexPath := path.Join(upath, index)
-			indexFile, err := h.root.Open(indexPath)
-			if err == nil {
-				indexFile.Close()
-				localRedirect(w, r, indexPath)
-				return
-			}
 		}
 
 		if !h.enableDirListing {
