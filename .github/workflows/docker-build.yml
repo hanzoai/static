@@ -15,4 +15,10 @@ jobs:
     uses: hanzoai/.github/.github/workflows/docker-build.yml@main
     with:
       image: ghcr.io/hanzoai/static
+      # amd64-only: no arm64 arcd runner is registered ([self-hosted,linux,arm64]
+      # "spark" is offline), so the default multi-arch build hangs build-arm64
+      # forever and create-manifest (needs both arches) never publishes the tag —
+      # only the per-arch :X-amd64 lands. The whole hanzo cluster is amd64. Restore
+      # "linux/amd64,linux/arm64" once an arm64 runner is back.
+      platforms: linux/amd64
     secrets: inherit
