@@ -1,0 +1,110 @@
+name: Release
+# Cuts a release of ghcr.io/hanzoai/static — the static-file-server image the operator
+# CR pins. Mirrors hanzoai/app/release.yml exactly:
+#     a git tag v<X.Y.Z>  ⇔  an image ghcr.io/hanzoai/static:v<X.Y.Z>
+# Builds on the git.hanzo.ai native runner (git-runner; arcd retired), with ghcr auth via
+# GH_PAT / user hanzo-dev.
+on:
+  push:
+    branches: [main]
+    # Workflow/doc-only edits must NOT cut a release. Real code changes on main still
+    # trigger; use workflow_dispatch to force. paths-ignore also keeps this native lane
+    # from colliding with the legacy .github Docker lane while both coexist (additive
+    # migration): a .github edit never cuts a native release.
+    paths-ignore:
+      - '.github/**'
+      - '**.md'
+  workflow_dispatch:
+permissions:
+  contents: write
+  packages: write
+  id-token: write
+concurrency:
+  group: release-static
+  cancel-in-progress: false
+jobs:
+  build-amd64:
+    runs-on: [hanzo-build-linux-amd64]
+    steps:
+      - name: Checkout (full history + tags — version floor read from tags)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+      - name: Compute next version (monotonic patch bump over the 0.5.x line)
+        id: ver
+        env:
+          GH_PAT: ${{ secrets.GH_PAT }}
+        run: |
+          set -euo pipefail
+          git fetch --tags --force --quiet
+          # The deployed lineage is 0.5.x (v0.5.2 is the newest release). Pin the scan to
+          # the 0.5. line so the bump stays monotonic over the ACTUAL deploy stream and a
+          # stray older-major tag can never hijack the floor. `sort -V` is purely numeric.
+          LINE='0.5.'
+          git_max="$(git tag -l "v${LINE}[0-9]*" \
+            | sed 's/^v//' | grep -E "^${LINE//./\\.}[0-9]+$" | sort -V | tail -1 || true)"
+          # Fold in ALREADY-PUSHED container tags on the same line, so a number that has
+          # an image (even from a run that died before git-tagging) is never reused
+          # (mirrors hanzoai/app). Best-effort — never fails the run if the API is down.
+          # Use curl (universally present) NOT gh — the native runners have no `gh`.
+          # jq-optional: grep fallback if a runner lacks jq.
+          cont_max=""
+          if [ -n "${GH_PAT:-}" ]; then
+            _pkgjson="$(curl -fsSL -H "Authorization: Bearer $GH_PAT" \
+              -H "Accept: application/vnd.github+json" \
+              'https://api.github.com/orgs/hanzoai/packages/container/static/versions?per_page=100' 2>/dev/null || true)"
+            cont_max="$(printf '%s' "$_pkgjson" \
+              | { jq -r '.[].metadata.container.tags[]?' 2>/dev/null || grep -oE '"v?[0-9]+\.[0-9]+\.[0-9]+"' | tr -d '"'; } \
+              | sed 's/^v//' | grep -E "^${LINE//./\\.}[0-9]+$" | sort -V | tail -1 || true)"
+          fi
+          max="$(printf '%s\n%s\n%s\n' "${LINE}0" "$git_max" "$cont_max" \
+            | grep -E "^${LINE//./\\.}[0-9]+$" | sort -V | tail -1)"
+          major="${max%%.*}"; rest="${max#*.}"; minor="${rest%%.*}"; patch="${rest##*.}"
+          version="${major}.${minor}.$((patch + 1))"
+          if git rev-parse -q --verify "refs/tags/v${version}" >/dev/null; then
+            echo "::error::computed v${version} already exists — aborting to avoid collision"; exit 1
+          fi
+          echo "version_v=v${version}" >> "$GITHUB_OUTPUT"
+          echo "Next release: v${version} (git_max='${git_max:-none}' container_max='${cont_max:-none}')"
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+        with:
+          driver: docker-container
+          driver-opts: network=host
+      # ghcr auth: same as hanzoai/app — GH_PAT (a PAT with write:packages, user hanzo-dev).
+      - name: Log in to ghcr.io (GH_PAT, write:packages — mirrors app)
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: hanzo-dev
+          password: ${{ secrets.GH_PAT }}
+      - name: Build + push ghcr.io/hanzoai/static
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: ghcr.io/hanzoai/static:${{ steps.ver.outputs.version_v }}
+          provenance: false
+      - name: Verify the pushed image is pullable (guard the image ⇔ tag invariant)
+        # build-push-action can exit 0 while the manifest isn't yet resolvable at the
+        # registry. Prove the image resolves BEFORE creating the git tag, so a bad push
+        # fails the run instead of landing the CR bump on a phantom tag (ImagePullBackOff).
+        run: |
+          set -euo pipefail
+          v="${{ steps.ver.outputs.version_v }}"
+          for i in 1 2 3 4 5 6; do
+            if docker manifest inspect "ghcr.io/hanzoai/static:${v}" >/dev/null 2>&1; then
+              echo "image ${v} is resolvable — safe to tag"; exit 0
+            fi
+            echo "ghcr manifest ${v} not visible yet (attempt ${i}/6) — retrying"; sleep 5
+          done
+          echo "::error::image ${v} not pullable after push — refusing to tag git (prevents ImagePullBackOff)"; exit 1
+      - name: Tag the release (image ⇔ tag invariant)
+        run: |
+          set -euo pipefail
+          git tag "${{ steps.ver.outputs.version_v }}"
+          git push origin "${{ steps.ver.outputs.version_v }}"
+          echo "Pushed image + tag ${{ steps.ver.outputs.version_v }} — bump the operator CR to deploy."
