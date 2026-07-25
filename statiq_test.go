@@ -422,3 +422,69 @@ func TestCleanURLHTMLFallback(t *testing.T) {
 		t.Fatalf("extension miss: expected 404, got %d", recorder.Code)
 	}
 }
+
+func TestCleanURLJavaScriptFallback(t *testing.T) {
+	t.Parallel()
+
+	tempDir, err := os.MkdirTemp("", "static-clean-url-js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	body := "(function(){/* embed loader */})();"
+	if err := os.WriteFile(filepath.Join(tempDir, "chat.js"), []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// Precedence probe: when both siblings exist, ".html" wins (existing contract).
+	if err := os.WriteFile(filepath.Join(tempDir, "dup.html"), []byte("<h1>html</h1>"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(tempDir, "dup.js"), []byte("js-sibling"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := static.CreateConfig()
+	cfg.Root = tempDir
+
+	handler, err := static.New(context.Background(), next(t), cfg, "static")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// The extensionless clean URL serves its .js sibling IN PLACE (200) with a
+	// JavaScript content type — the embed-endpoint contract (a.hanzo.ai/chat →
+	// chat.js). The correct type is load-bearing under X-Content-Type-Options:
+	// nosniff, so this asserts the type, not just the status.
+	recorder := httptest.NewRecorder()
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, "http://localhost/chat", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler.ServeHTTP(recorder, req)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("clean JS URL: expected 200, got %d", recorder.Code)
+	}
+	if recorder.Body.String() != body {
+		t.Fatalf("clean JS URL served wrong body: %q", recorder.Body.String())
+	}
+	if ct := recorder.Header().Get("Content-Type"); !strings.Contains(ct, "javascript") {
+		t.Fatalf("clean JS URL: expected a javascript content type, got %q", ct)
+	}
+
+	// The explicit .js path still works.
+	recorder = httptest.NewRecorder()
+	req, _ = http.NewRequestWithContext(context.Background(), http.MethodGet, "http://localhost/chat.js", nil)
+	handler.ServeHTTP(recorder, req)
+	if recorder.Code != http.StatusOK || recorder.Body.String() != body {
+		t.Fatalf("explicit .js: expected 200 with body, got %d %q", recorder.Code, recorder.Body.String())
+	}
+
+	// .html precedence: /dup serves the HTML sibling, not the JS one.
+	recorder = httptest.NewRecorder()
+	req, _ = http.NewRequestWithContext(context.Background(), http.MethodGet, "http://localhost/dup", nil)
+	handler.ServeHTTP(recorder, req)
+	if recorder.Code != http.StatusOK || !strings.Contains(recorder.Body.String(), "<h1>html</h1>") {
+		t.Fatalf(".html precedence: expected the .html sibling, got %d %q", recorder.Code, recorder.Body.String())
+	}
+}

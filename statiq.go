@@ -142,13 +142,19 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	f, err := h.root.Open(upath)
-	// Clean-URL fallback: an extensionless miss serves its ".html" sibling in
-	// place (no redirect — the clean URL is canonical). This is the static-export
-	// contract every exporter (Next, Astro, …) and host (Pages) shares:
-	// /docs/flags is stored as docs/flags.html.
+	// Clean-URL fallback: an extensionless miss serves a same-named sibling in
+	// place (no redirect — the clean URL is canonical), trying ".html" then ".js".
+	// ".html" is the static-export contract every exporter (Next, Astro, …) and
+	// host (Pages) shares: /docs/flags is stored as docs/flags.html. ".js" serves
+	// embed endpoints at their clean path with the correct text/javascript type —
+	// X-Content-Type-Options: nosniff makes the type load-bearing, so a.hanzo.ai/chat
+	// (stored as chat.js) must resolve to a .js file, not a sniffed text/plain one.
 	if err != nil && os.IsNotExist(err) && !strings.HasSuffix(upath, "/") && path.Ext(upath) == "" {
-		if hf, herr := h.root.Open(upath + ".html"); herr == nil {
-			f, err = hf, nil
+		for _, ext := range []string{".html", ".js"} {
+			if hf, herr := h.root.Open(upath + ext); herr == nil {
+				f, err = hf, nil
+				break
+			}
 		}
 	}
 	if err != nil {
