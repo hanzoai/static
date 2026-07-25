@@ -18,6 +18,20 @@ import (
 	"github.com/hanzoai/static"
 )
 
+// hanzoCSP is the one definition of what a Hanzo site trusts: its own
+// origin plus the first-party widget and telemetry hosts. A site selects
+// it by name (HANZO_STATIC_CSP=hanzo) rather than restating the policy,
+// so a new first-party origin is added here once and every site inherits
+// it. Sites with genuinely bespoke needs (video embeds, wallets) still
+// pass a full policy.
+const hanzoCSP = "default-src 'self'; " +
+	"script-src 'self' 'unsafe-inline' 'unsafe-eval' https://hanzo.app https://analytics.hanzo.ai https://insights.hanzo.ai; " +
+	"style-src 'self' 'unsafe-inline'; " +
+	"img-src 'self' data: https:; " +
+	"font-src 'self' data:; " +
+	"connect-src 'self' https:; " +
+	"frame-ancestors 'none'; base-uri 'self'; object-src 'none'"
+
 // securityHeaders stamps a baseline set of security headers on every
 // response. The Permissions-Policy and Content-Security-Policy values
 // are env-overridable for SPAs that legitimately need camera/microphone
@@ -30,6 +44,9 @@ func securityHeaders(next http.Handler) http.Handler {
 		"camera=(), microphone=(), geolocation=()")
 	csp := envOr("HANZO_STATIC_CSP",
 		"default-src 'none'; img-src 'self'; font-src 'self'; style-src 'self'")
+	if csp == "hanzo" {
+		csp = hanzoCSP
+	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
 		w.Header().Set("X-Content-Type-Options", "nosniff")
