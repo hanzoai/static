@@ -2,6 +2,7 @@
 package static
 
 import (
+	"compress/gzip"
 	"context"
 	"fmt"
 	"html/template"
@@ -223,16 +224,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	h.setCacheHeaders(w, r, d)
-
-	name := d.Name()
-	ext := filepath.Ext(name)
-	contentType := mime.TypeByExtension(ext)
-	if contentType != "" {
-		w.Header().Set("Content-Type", contentType)
-	}
-
-	http.ServeContent(w, r, d.Name(), d.ModTime(), f.(io.ReadSeeker))
+	h.writeFile(w, r, d, f.(io.ReadSeeker))
 }
 
 func (h *Handler) serveDirectoryListing(w http.ResponseWriter, r *http.Request, f http.File, d fs.FileInfo) {
@@ -321,19 +313,68 @@ func (h *Handler) serveDirectoryListing(w http.ResponseWriter, r *http.Request, 
 	}
 }
 
-func (h *Handler) setCacheHeaders(w http.ResponseWriter, _ *http.Request, d fs.FileInfo) {
+// immutable reports whether a URL path addresses build-hashed content, which
+// can never change under that name. A framework writes a fresh filename for
+// every build, so the old one is only ever requested by a page that still
+// wants the old bytes.
+func immutable(urlPath string) bool {
+	return strings.Contains(urlPath, "/_next/static/") ||
+		strings.Contains(urlPath, "/_app/immutable/")
+}
+
+func (h *Handler) setCacheHeaders(w http.ResponseWriter, r *http.Request, d fs.FileInfo) {
 	ext := filepath.Ext(d.Name())
 
-	if maxAge, ok := h.cacheControl[ext]; ok {
-		w.Header().Set("Cache-Control", maxAge)
-	} else if maxAge, ok := h.cacheControl["*"]; ok {
-		w.Header().Set("Cache-Control", maxAge)
-	} else {
+	switch {
+	case h.cacheControl[ext] != "":
+		w.Header().Set("Cache-Control", h.cacheControl[ext])
+	case h.cacheControl["*"] != "":
+		w.Header().Set("Cache-Control", h.cacheControl["*"])
+	case immutable(r.URL.Path):
+		w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+	case ext == ".html" || ext == ".htm":
+		// A page must never outlive the hashed assets it names: serving stale
+		// HTML from cache asks for chunks the current deploy has deleted, and
+		// the site renders blank. Revalidating is cheap — it answers 304.
+		w.Header().Set("Cache-Control", "no-cache")
+	default:
 		w.Header().Set("Cache-Control", "max-age=86400")
 	}
 
 	w.Header().Set("Last-Modified", d.ModTime().UTC().Format(http.TimeFormat))
+	w.Header().Set("ETag", etag(d))
 }
+
+// etag identifies a version of a file. Size and mtime change together whenever
+// the content does, which is what a validator has to promise.
+func etag(d fs.FileInfo) string {
+	return fmt.Sprintf(`"%x-%x"`, d.ModTime().UnixNano(), d.Size())
+}
+
+// compressible reports whether a content type is worth gzipping. Media and
+// archives are already compressed; running them through gzip spends CPU to
+// make them marginally larger.
+func compressible(contentType string) bool {
+	ct := strings.ToLower(contentType)
+	if strings.HasPrefix(ct, "text/") {
+		return true
+	}
+	for _, s := range []string{"javascript", "json", "xml", "svg", "wasm", "font/ttf", "font/otf", "x-font"} {
+		if strings.Contains(ct, s) {
+			return true
+		}
+	}
+	return false
+}
+
+// gzipWriter sends the body compressed. Content-Length is deliberately absent:
+// the length is not known until the last byte is compressed.
+type gzipWriter struct {
+	http.ResponseWriter
+	gz *gzip.Writer
+}
+
+func (w gzipWriter) Write(b []byte) (int, error) { return w.gz.Write(b) }
 
 func (h *Handler) serveFile(w http.ResponseWriter, r *http.Request, filePath string) {
 	f, err := os.Open(filePath)
@@ -349,15 +390,58 @@ func (h *Handler) serveFile(w http.ResponseWriter, r *http.Request, filePath str
 		return
 	}
 
+	h.writeFile(w, r, d, f)
+}
+
+// writeFile is the one path a file body takes out of this server: validators,
+// content type, then the bytes — compressed when the client asked for that and
+// the type gains from it.
+func (h *Handler) writeFile(w http.ResponseWriter, r *http.Request, d fs.FileInfo, content io.ReadSeeker) {
 	h.setCacheHeaders(w, r, d)
 
-	ext := filepath.Ext(d.Name())
-	contentType := mime.TypeByExtension(ext)
+	contentType := mime.TypeByExtension(filepath.Ext(d.Name()))
 	if contentType != "" {
 		w.Header().Set("Content-Type", contentType)
 	}
 
-	http.ServeContent(w, r, d.Name(), d.ModTime(), f)
+	// Whether a client gets the compressed or the plain bytes depends on what
+	// it asked for, so a shared cache has to key on that.
+	w.Header().Add("Vary", "Accept-Encoding")
+
+	// The client already holds this version.
+	if match := r.Header.Get("If-None-Match"); match != "" && strings.Contains(match, etag(d)) {
+		w.WriteHeader(http.StatusNotModified)
+		return
+	}
+
+	// A range names offsets into the stored bytes, so a ranged request is
+	// answered uncompressed.
+	if r.Header.Get("Range") == "" && compressible(contentType) && acceptsGzip(r) {
+		w.Header().Set("Content-Encoding", "gzip")
+		gz := gzip.NewWriter(w)
+		defer gz.Close()
+		_, _ = io.Copy(gzipWriter{ResponseWriter: w, gz: gz}, content)
+		return
+	}
+
+	http.ServeContent(w, r, d.Name(), d.ModTime(), content)
+}
+
+// acceptsGzip reports whether the client offered gzip. A bare "gzip;q=0"
+// declines it.
+func acceptsGzip(r *http.Request) bool {
+	for _, part := range strings.Split(r.Header.Get("Accept-Encoding"), ",") {
+		fields := strings.Split(strings.TrimSpace(part), ";")
+		if strings.EqualFold(strings.TrimSpace(fields[0]), "gzip") {
+			for _, p := range fields[1:] {
+				if strings.EqualFold(strings.TrimSpace(p), "q=0") {
+					return false
+				}
+			}
+			return true
+		}
+	}
+	return false
 }
 
 func localRedirect(w http.ResponseWriter, r *http.Request, newPath string) {
