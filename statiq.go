@@ -110,6 +110,13 @@ func New(ctx context.Context, next http.Handler, config *Config, name string) (h
 		rootPath = root
 	}
 
+	// ⚠ A custom error page currently flips the status to 200, so every miss is a
+	// SOFT-404: the branded page serves as though it were real, and crawlers
+	// index it. TestCustomErrorPage pins that, so it is encoded behaviour rather
+	// than an oversight — and this type is also the Yaegi plugin inside
+	// hanzoai/ingress, so changing it moves error semantics for every
+	// static-served site at once. Left alone deliberately; `-spa` already exists
+	// for the one case where 200 is the right answer.
 	notFoundResponseCode := http.StatusNotFound
 	if config.ErrorPage404 != "" {
 		notFoundResponseCode = http.StatusOK

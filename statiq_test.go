@@ -474,3 +474,4 @@ func TestDirectoryDoesNotShadowHTMLSibling(t *testing.T) {
 		}
 	}
 }
+
