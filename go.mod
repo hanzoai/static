@@ -1,6 +1,6 @@
 module github.com/hanzoai/static
 
-go 1.26.4
+go 1.26.5
 
 require github.com/hanzos3/go-sdk v1.0.1
 
