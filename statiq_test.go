@@ -422,3 +422,55 @@ func TestCleanURLHTMLFallback(t *testing.T) {
 		t.Fatalf("extension miss: expected 404, got %d", recorder.Code)
 	}
 }
+
+// TestDirectoryDoesNotShadowHTMLSibling pins the Next App Router export layout:
+// the page is `skills.html` and `skills/` exists too, holding only the RSC
+// payloads (`__next.<id>.txt`) — no index.html.
+//
+// The open at the top of ServeHTTP SUCCEEDS on that directory, so the
+// extensionless ".html" fallback (gated on IsNotExist) never runs. Without the
+// sibling check in the directory branch the page is unreachable at EVERY
+// spelling: /skills redirects to /skills/, which then serves the 404 page.
+// That is worse than the nginx this server replaces, which served /skills via
+// `try_files $uri.html`. Both spellings must serve the page.
+func TestDirectoryDoesNotShadowHTMLSibling(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "sibling")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	if err := os.MkdirAll(filepath.Join(tempDir, "skills"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(tempDir, "skills.html"), []byte("<h1>skills</h1>"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// The directory holds ONLY payload files — deliberately no index.html.
+	if err := os.WriteFile(filepath.Join(tempDir, "skills", "__next.x.txt"), []byte("rsc"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := static.CreateConfig()
+	cfg.Root = tempDir
+
+	handler, err := static.New(context.Background(), next(t), cfg, "static")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, target := range []string{"http://localhost/skills", "http://localhost/skills/"} {
+		recorder := httptest.NewRecorder()
+		req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, target, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		handler.ServeHTTP(recorder, req)
+		if recorder.Code != http.StatusOK {
+			t.Fatalf("%s: expected 200, got %d", target, recorder.Code)
+		}
+		if !strings.Contains(recorder.Body.String(), "<h1>skills</h1>") {
+			t.Fatalf("%s served wrong body: %q", target, recorder.Body.String())
+		}
+	}
+}
