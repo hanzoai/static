@@ -196,7 +196,25 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
-		// No index file: canonicalize to a trailing slash, then list (or 404).
+		// No index file. Try the ".html" sibling BEFORE canonicalizing, because a
+		// directory must not shadow a page of the same name.
+		//
+		// Next's App Router export emits both: the page at `skills.html` and a
+		// `skills/` directory holding only its RSC payloads
+		// (`__next.<id>.txt`) — no index.html. The open at the top of ServeHTTP
+		// SUCCEEDS on that directory, so the extensionless ".html" fallback above
+		// never runs (it is gated on IsNotExist), and without this the page is
+		// unreachable at every spelling: /skills redirects to /skills/, which then
+		// serves the 404 page. That is a WORSE answer than the nginx it replaces,
+		// which at least served /skills via try_files $uri.html.
+		sibling := strings.TrimSuffix(upath, "/") + ".html"
+		if sf, serr := h.root.Open(sibling); serr == nil {
+			sf.Close()
+			h.serveFile(w, r, filepath.Join(h.rootPath, sibling))
+			return
+		}
+
+		// No index file and no sibling: canonicalize to a trailing slash, then list (or 404).
 		url := r.URL.Path
 		if len(url) == 0 || url[len(url)-1] != '/' {
 			localRedirect(w, r, url+"/")
