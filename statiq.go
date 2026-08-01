@@ -340,10 +340,19 @@ func (h *Handler) serveDirectoryListing(w http.ResponseWriter, r *http.Request, 
 	}
 }
 
+// cacheControlled is a file whose backing store carries its own Cache-Control.
+// The store wins over the server's per-extension defaults: whoever wrote the
+// object knows whether those exact bytes can ever change.
+type cacheControlled interface {
+	CacheControl() string
+}
+
 func (h *Handler) setCacheHeaders(w http.ResponseWriter, _ *http.Request, d fs.FileInfo) {
 	ext := filepath.Ext(d.Name())
 
-	if maxAge, ok := h.cacheControl[ext]; ok {
+	if c, ok := d.(cacheControlled); ok && c.CacheControl() != "" {
+		w.Header().Set("Cache-Control", c.CacheControl())
+	} else if maxAge, ok := h.cacheControl[ext]; ok {
 		w.Header().Set("Cache-Control", maxAge)
 	} else if maxAge, ok := h.cacheControl["*"]; ok {
 		w.Header().Set("Cache-Control", maxAge)

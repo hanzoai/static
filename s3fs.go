@@ -93,18 +93,20 @@ func (s *S3FS) Open(name string) (http.File, error) {
 	}
 
 	return &s3File{
-		Reader: bytes.NewReader(data),
-		name:   name,
-		size:   info.Size,
-		mod:    info.LastModified,
+		Reader:       bytes.NewReader(data),
+		name:         name,
+		size:         info.Size,
+		mod:          info.LastModified,
+		cacheControl: info.Metadata.Get("Cache-Control"),
 	}, nil
 }
 
 type s3File struct {
 	*bytes.Reader
-	name string
-	size int64
-	mod  time.Time
+	name         string
+	size         int64
+	mod          time.Time
+	cacheControl string
 }
 
 func (f *s3File) Close() error { return nil }
@@ -114,13 +116,14 @@ func (f *s3File) Readdir(int) ([]fs.FileInfo, error) {
 }
 
 func (f *s3File) Stat() (fs.FileInfo, error) {
-	return &s3FileInfo{name: f.name, size: f.size, mod: f.mod}, nil
+	return &s3FileInfo{name: f.name, size: f.size, mod: f.mod, cacheControl: f.cacheControl}, nil
 }
 
 type s3FileInfo struct {
-	name string
-	size int64
-	mod  time.Time
+	name         string
+	size         int64
+	mod          time.Time
+	cacheControl string
 }
 
 func (i *s3FileInfo) Name() string       { return i.name }
@@ -129,3 +132,9 @@ func (i *s3FileInfo) Mode() fs.FileMode  { return 0444 }
 func (i *s3FileInfo) ModTime() time.Time { return i.mod }
 func (i *s3FileInfo) IsDir() bool        { return false }
 func (i *s3FileInfo) Sys() interface{}   { return nil }
+
+// CacheControl reports the Cache-Control the object carries in S3, or "" when
+// it carries none. Content-addressed assets (a versioned font path, a hashed
+// bundle) are immutable and say so on the object itself, so the lifetime
+// travels with the bytes instead of being restated in server config.
+func (i *s3FileInfo) CacheControl() string { return i.cacheControl }
