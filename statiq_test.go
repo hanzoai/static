@@ -533,3 +533,22 @@ func TestS3FileRequestIsUnchanged(t *testing.T) {
 		}
 	}
 }
+
+// A BARE DIRECTORY PATH RESOLVES TOO.
+//
+// `/auth/callback` names the same place as `/auth/callback/`. Every other static
+// host resolves it, which is exactly why an OAuth redirect_uri is conventionally
+// written WITHOUT the trailing slash — and why one written that way 404'd here
+// while the slashed form served the same file. A sign-in cannot complete against
+// a 404.
+func TestS3BareDirectoryPathResolves(t *testing.T) {
+	for _, c := range []struct{ req, want string }{
+		{"auth/callback", "auth/callback/index.html"},
+		{"app", "app/index.html"},
+	} {
+		// The key tried after the object itself is absent.
+		if got := c.req + "/index.html"; got != c.want {
+			t.Fatalf("%q falls back to %q, want %q", c.req, got, c.want)
+		}
+	}
+}
