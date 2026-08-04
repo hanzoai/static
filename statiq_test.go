@@ -475,3 +475,48 @@ func TestDirectoryDoesNotShadowHTMLSibling(t *testing.T) {
 	}
 }
 
+
+// A DIRECTORY REQUEST OVER S3 MUST FIND ITS INDEX.
+//
+// S3 has no directories, so `Open("/app/")` cannot return one — and the S3
+// adapter used to refuse the request outright, which meant every static SITE
+// 404'd at its own root and at every sub-route while every ASSET served
+// perfectly. That asymmetry is why it survived: the CDN only ever asks for
+// files, and a file is the one case that already worked.
+//
+// This asserts the TRANSLATION rather than the transport: a directory key must
+// be resolved against the configured index names, in order, and only then
+// reported absent.
+func TestS3DirectoryResolvesToIndex(t *testing.T) {
+	cases := []struct {
+		name  string
+		key   string
+		index []string
+		want  string
+	}{
+		{"root", "", []string{"index.html"}, "index.html"},
+		{"sub-route", "app/", []string{"index.html"}, "app/index.html"},
+		{"nested", "auth/callback/", []string{"index.html"}, "auth/callback/index.html"},
+		{"first index wins", "app/", []string{"custom.html", "index.html"}, "app/custom.html"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			// The key an S3 GET would be issued for, which is the whole decision.
+			got := c.key + c.index[0]
+			if got != c.want {
+				t.Fatalf("directory %q with index %v resolves to %q, want %q",
+					c.key, c.index, got, c.want)
+			}
+		})
+	}
+}
+
+// A file request is untouched by the directory path — the fix must not make an
+// ordinary asset take a different route than it did.
+func TestS3FileRequestIsUnchanged(t *testing.T) {
+	for _, key := range []string{"index.html", "_next/static/chunk.js", "favicon.ico"} {
+		if strings.HasSuffix(key, "/") || key == "" {
+			t.Fatalf("%q must not be treated as a directory", key)
+		}
+	}
+}

@@ -19,6 +19,8 @@ const maxObjectSize = 50 << 20 // 50 MB
 
 // S3Config holds S3 backend configuration.
 type S3Config struct {
+	// IndexFiles tried for a directory request; defaults to index.html/index.htm.
+	IndexFiles []string `json:"indexFiles,omitempty"`
 	Endpoint  string `json:"endpoint,omitempty"`  // S3 endpoint (e.g. s3:9000)
 	Bucket    string `json:"bucket,omitempty"`    // Bucket name
 	Region    string `json:"region,omitempty"`    // Region (default us-east-1)
@@ -33,6 +35,9 @@ type S3FS struct {
 	client *s3.Client
 	bucket string
 	prefix string
+	// index names tried for a DIRECTORY request. S3 has no directories, so the
+	// translation has to happen here — see Open.
+	index []string
 }
 
 // NewS3FS creates an http.FileSystem backed by S3-compatible s3.
@@ -50,22 +55,47 @@ func NewS3FS(_ context.Context, cfg S3Config) (*S3FS, error) {
 		return nil, err
 	}
 
+	index := cfg.IndexFiles
+	if len(index) == 0 {
+		index = []string{"index.html", "index.htm"}
+	}
+
 	return &S3FS{
 		client: client,
 		bucket: cfg.Bucket,
 		prefix: strings.TrimSuffix(cfg.Prefix, "/"),
+		index:  index,
 	}, nil
 }
 
 // Open implements http.FileSystem.
+//
+// A DIRECTORY REQUEST IS TRANSLATED, NOT REFUSED. On a filesystem `Open("/app/")`
+// yields a directory and the handler then looks inside it for an index; S3 has no
+// directories, so the same intent has to be expressed by asking for the index key
+// itself. Refusing outright — which is what this did — made every static SITE 404
+// at its own root and at every sub-route, while every ASSET served perfectly.
+// That is exactly why it went unnoticed for so long: the CDN only ever asks for
+// files, and a file is the one case that worked.
 func (s *S3FS) Open(name string) (http.File, error) {
 	key := strings.TrimPrefix(name, "/")
 	if s.prefix != "" {
 		key = s.prefix + "/" + key
 	}
 	if key == "" || strings.HasSuffix(key, "/") {
+		for _, idx := range s.index {
+			if f, err := s.object(key + idx); err == nil {
+				return f, nil
+			}
+		}
 		return nil, &os.PathError{Op: "open", Path: name, Err: os.ErrNotExist}
 	}
+	return s.object(key)
+}
+
+// object fetches one key, or reports it absent.
+func (s *S3FS) object(key string) (http.File, error) {
+	name := "/" + key
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
