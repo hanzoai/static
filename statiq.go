@@ -72,16 +72,15 @@ func init() {
 
 // Handler is a static file server handler.
 type Handler struct {
-	root                 http.FileSystem
-	rootPath             string
-	enableDirListing     bool
-	indexFiles           []string
-	spaMode              bool
-	spaIndex             string
-	errorPage404         string
-	cacheControl         map[string]string
-	notFoundResponseCode int
-	name                 string
+	root             http.FileSystem
+	rootPath         string
+	enableDirListing bool
+	indexFiles       []string
+	spaMode          bool
+	spaIndex         string
+	errorPage404     string
+	cacheControl     map[string]string
+	name             string
 }
 
 // New creates a new static file server middleware.
@@ -110,29 +109,16 @@ func New(ctx context.Context, next http.Handler, config *Config, name string) (h
 		rootPath = root
 	}
 
-	// ⚠ A custom error page currently flips the status to 200, so every miss is a
-	// SOFT-404: the branded page serves as though it were real, and crawlers
-	// index it. TestCustomErrorPage pins that, so it is encoded behaviour rather
-	// than an oversight — and this type is also the Yaegi plugin inside
-	// hanzoai/ingress, so changing it moves error semantics for every
-	// static-served site at once. Left alone deliberately; `-spa` already exists
-	// for the one case where 200 is the right answer.
-	notFoundResponseCode := http.StatusNotFound
-	if config.ErrorPage404 != "" {
-		notFoundResponseCode = http.StatusOK
-	}
-
 	return &Handler{
-		root:                 rootFS,
-		rootPath:             rootPath,
-		enableDirListing:     config.EnableDirectoryListing,
-		indexFiles:           config.IndexFiles,
-		spaMode:              config.SPAMode,
-		spaIndex:             config.SPAIndex,
-		errorPage404:         config.ErrorPage404,
-		cacheControl:         config.CacheControl,
-		notFoundResponseCode: notFoundResponseCode,
-		name:                 name,
+		root:             rootFS,
+		rootPath:         rootPath,
+		enableDirListing: config.EnableDirectoryListing,
+		indexFiles:       config.IndexFiles,
+		spaMode:          config.SPAMode,
+		spaIndex:         config.SPAIndex,
+		errorPage404:     config.ErrorPage404,
+		cacheControl:     config.CacheControl,
+		name:             name,
 	}, nil
 }
 
@@ -166,8 +152,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 
 			if h.errorPage404 != "" {
-				w.WriteHeader(h.notFoundResponseCode)
-				h.serveFile(w, r, filepath.Join(h.rootPath, h.errorPage404))
+				h.serveErrorPage(w, filepath.Join(h.rootPath, h.errorPage404))
 				return
 			}
 
@@ -230,8 +215,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 		if !h.enableDirListing {
 			if h.errorPage404 != "" {
-				w.WriteHeader(h.notFoundResponseCode)
-				h.serveFile(w, r, filepath.Join(h.rootPath, h.errorPage404))
+				h.serveErrorPage(w, filepath.Join(h.rootPath, h.errorPage404))
 				return
 			}
 			http.NotFound(w, r)
@@ -352,6 +336,44 @@ func (h *Handler) setCacheHeaders(w http.ResponseWriter, _ *http.Request, d fs.F
 	}
 
 	w.Header().Set("Last-Modified", d.ModTime().UTC().Format(http.TimeFormat))
+}
+
+// serveErrorPage writes a custom error page with the status it stands for.
+//
+// A 404 body served with 200 is a soft 404: the words say the page is gone while
+// the status says it is fine. A crawler indexes it as a real page, a client cannot
+// tell a typo from a hit, and every wrong URL on the site becomes a duplicate of
+// whatever the error page contains. The status is the machine-readable half of the
+// answer and it has to agree with the human half. Configuring ErrorPage404 used to
+// FORCE 200 for exactly this reason and it was backwards — SPAMode already exists
+// for the one case that legitimately answers 200 to an unknown path, because there
+// a client-side router really will resolve it.
+//
+// It deliberately does not reuse serveFile. That path ends in http.ServeContent,
+// which negotiates Range and If-Modified-Since and writes its own 200 — none of
+// which an error body wants. The previous code kept ServeContent and tried to set
+// the status by calling w.WriteHeader first, which cannot work: WriteHeader sends
+// the header map, so the Content-Type serveFile set afterwards was discarded and
+// net/http logged a superfluous WriteHeader call on every miss. Headers, then
+// status, then body is the only order that produces a correct response.
+func (h *Handler) serveErrorPage(w http.ResponseWriter, filePath string) {
+	f, err := os.Open(filePath)
+	if err != nil {
+		// The configured page is missing. Still answer with the truth rather than
+		// letting a misconfiguration turn a 404 into a 500.
+		http.Error(w, "404 page not found", http.StatusNotFound)
+		return
+	}
+	defer f.Close()
+
+	if ct := mime.TypeByExtension(filepath.Ext(filePath)); ct != "" {
+		w.Header().Set("Content-Type", ct)
+	}
+	// Never cached as if it were the resource that was asked for: the same URL may
+	// exist tomorrow, and a cached 404 would outlive the mistake.
+	w.Header().Set("Cache-Control", "no-store")
+	w.WriteHeader(http.StatusNotFound)
+	_, _ = io.Copy(w, f)
 }
 
 func (h *Handler) serveFile(w http.ResponseWriter, r *http.Request, filePath string) {

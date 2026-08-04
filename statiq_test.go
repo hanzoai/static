@@ -193,6 +193,19 @@ func TestSPAMode(t *testing.T) {
 	}
 }
 
+// A custom 404 page is served WITH 404.
+//
+// This test asserted 200, with no stated reason — it encoded the implementation
+// rather than a decision, and the implementation forced StatusOK whenever
+// ErrorPage404 was set. That is a soft 404: the body says the page is gone while
+// the status says it is fine, so a crawler indexes every wrong URL as a real page
+// duplicating the error content, and a client cannot tell a typo from a hit. It
+// was live on the cloud.hanzo.ai marketing site, which ships a real 404.html that
+// was never reachable.
+//
+// SPAMode is the case that legitimately answers 200 to an unknown path, because a
+// client-side router really will resolve it — see TestSPAMode, which still asserts
+// 200 and is what this must not be conflated with.
 func TestCustomErrorPage(t *testing.T) {
 	t.Parallel()
 
@@ -224,8 +237,8 @@ func TestCustomErrorPage(t *testing.T) {
 
 	handler.ServeHTTP(recorder, req)
 
-	if recorder.Code != http.StatusOK {
-		t.Errorf("Expected 200 OK for custom error page, got %d", recorder.Code)
+	if recorder.Code != http.StatusNotFound {
+		t.Errorf("Expected 404 for a custom error page, got %d", recorder.Code)
 	}
 
 	if !strings.Contains(recorder.Body.String(), "Custom 404 Error") {
