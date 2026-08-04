@@ -72,16 +72,15 @@ func init() {
 
 // Handler is a static file server handler.
 type Handler struct {
-	root                 http.FileSystem
-	rootPath             string
-	enableDirListing     bool
-	indexFiles           []string
-	spaMode              bool
-	spaIndex             string
-	errorPage404         string
-	cacheControl         map[string]string
-	notFoundResponseCode int
-	name                 string
+	root             http.FileSystem
+	rootPath         string
+	enableDirListing bool
+	indexFiles       []string
+	spaMode          bool
+	spaIndex         string
+	errorPage404     string
+	cacheControl     map[string]string
+	name             string
 }
 
 // New creates a new static file server middleware.
@@ -110,22 +109,16 @@ func New(ctx context.Context, next http.Handler, config *Config, name string) (h
 		rootPath = root
 	}
 
-	notFoundResponseCode := http.StatusNotFound
-	if config.ErrorPage404 != "" {
-		notFoundResponseCode = http.StatusOK
-	}
-
 	return &Handler{
-		root:                 rootFS,
-		rootPath:             rootPath,
-		enableDirListing:     config.EnableDirectoryListing,
-		indexFiles:           config.IndexFiles,
-		spaMode:              config.SPAMode,
-		spaIndex:             config.SPAIndex,
-		errorPage404:         config.ErrorPage404,
-		cacheControl:         config.CacheControl,
-		notFoundResponseCode: notFoundResponseCode,
-		name:                 name,
+		root:             rootFS,
+		rootPath:         rootPath,
+		enableDirListing: config.EnableDirectoryListing,
+		indexFiles:       config.IndexFiles,
+		spaMode:          config.SPAMode,
+		spaIndex:         config.SPAIndex,
+		errorPage404:     config.ErrorPage404,
+		cacheControl:     config.CacheControl,
+		name:             name,
 	}, nil
 }
 
@@ -134,8 +127,20 @@ func (h *Handler) GetTracingInformation() (string, string) {
 	return h.name, "Static"
 }
 
-// ServeHTTP serves HTTP requests with static files.
+// ServeHTTP serves HTTP requests with static files, encoding the response
+// when the client accepts it. Negotiation wraps every path below — files,
+// directory listings, the SPA index and the 404 page — so there is one place
+// in this server that decides how bytes go on the wire.
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if acceptsGzip(r) {
+		gw := &gzipWriter{ResponseWriter: w}
+		defer gw.close()
+		w = gw
+	}
+	h.serve(w, r)
+}
+
+func (h *Handler) serve(w http.ResponseWriter, r *http.Request) {
 	upath := r.URL.Path
 	if !strings.HasPrefix(upath, "/") {
 		upath = "/" + upath
@@ -154,13 +159,13 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		if os.IsNotExist(err) {
 			if h.spaMode {
-				h.serveFile(w, r, filepath.Join(h.rootPath, h.spaIndex))
+				// A client-side router owns the path; 200 is the whole point.
+				h.serveFile(w, r, filepath.Join(h.rootPath, h.spaIndex), http.StatusOK)
 				return
 			}
 
 			if h.errorPage404 != "" {
-				w.WriteHeader(h.notFoundResponseCode)
-				h.serveFile(w, r, filepath.Join(h.rootPath, h.errorPage404))
+				h.serveFile(w, r, filepath.Join(h.rootPath, h.errorPage404), http.StatusNotFound)
 				return
 			}
 
@@ -191,7 +196,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			indexPath := path.Join(upath, index)
 			if indexFile, ierr := h.root.Open(indexPath); ierr == nil {
 				indexFile.Close()
-				h.serveFile(w, r, filepath.Join(h.rootPath, indexPath))
+				h.serveFile(w, r, filepath.Join(h.rootPath, indexPath), http.StatusOK)
 				return
 			}
 		}
@@ -205,8 +210,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 		if !h.enableDirListing {
 			if h.errorPage404 != "" {
-				w.WriteHeader(h.notFoundResponseCode)
-				h.serveFile(w, r, filepath.Join(h.rootPath, h.errorPage404))
+				h.serveFile(w, r, filepath.Join(h.rootPath, h.errorPage404), http.StatusNotFound)
 				return
 			}
 			http.NotFound(w, r)
@@ -329,7 +333,10 @@ func (h *Handler) setCacheHeaders(w http.ResponseWriter, _ *http.Request, d fs.F
 	w.Header().Set("Last-Modified", d.ModTime().UTC().Format(http.TimeFormat))
 }
 
-func (h *Handler) serveFile(w http.ResponseWriter, r *http.Request, filePath string) {
+// serveFile writes filePath's contents under the given status. Every header
+// is set before the body is handed to http.ServeContent, because ServeContent
+// is what calls WriteHeader — anything stamped after it is silently dropped.
+func (h *Handler) serveFile(w http.ResponseWriter, r *http.Request, filePath string, status int) {
 	f, err := os.Open(filePath)
 	if err != nil {
 		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
@@ -343,7 +350,17 @@ func (h *Handler) serveFile(w http.ResponseWriter, r *http.Request, filePath str
 		return
 	}
 
-	h.setCacheHeaders(w, r, d)
+	modTime := d.ModTime()
+	if status == http.StatusOK {
+		h.setCacheHeaders(w, r, d)
+	} else {
+		// An error body must not be cached — the path it stands in for may
+		// come into existence at any time — and it carries no validator, so
+		// ServeContent is given a zero mtime and skips Last-Modified/304.
+		w.Header().Set("Cache-Control", "no-store")
+		modTime = time.Time{}
+		w = &statusOverride{ResponseWriter: w, code: status}
+	}
 
 	ext := filepath.Ext(d.Name())
 	contentType := mime.TypeByExtension(ext)
@@ -351,7 +368,23 @@ func (h *Handler) serveFile(w http.ResponseWriter, r *http.Request, filePath str
 		w.Header().Set("Content-Type", contentType)
 	}
 
-	http.ServeContent(w, r, d.Name(), d.ModTime(), f)
+	http.ServeContent(w, r, d.Name(), modTime, f)
+}
+
+// statusOverride rewrites the 200 that http.ServeContent always writes for a
+// full body into the status the caller actually meant. Any other status
+// ServeContent chooses for itself (416 on an unsatisfiable range) is its own
+// decision about the transfer and passes through untouched.
+type statusOverride struct {
+	http.ResponseWriter
+	code int
+}
+
+func (s *statusOverride) WriteHeader(status int) {
+	if status == http.StatusOK {
+		status = s.code
+	}
+	s.ResponseWriter.WriteHeader(status)
 }
 
 func localRedirect(w http.ResponseWriter, r *http.Request, newPath string) {

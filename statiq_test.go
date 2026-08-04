@@ -224,12 +224,24 @@ func TestCustomErrorPage(t *testing.T) {
 
 	handler.ServeHTTP(recorder, req)
 
-	if recorder.Code != http.StatusOK {
-		t.Errorf("Expected 200 OK for custom error page, got %d", recorder.Code)
+	// A custom error page changes the BODY of a not-found response, not its
+	// meaning. Answering 200 makes every unknown path on the host look like a
+	// real page to a crawler, a link checker and an uptime probe alike.
+	if recorder.Code != http.StatusNotFound {
+		t.Errorf("Expected 404 for custom error page, got %d", recorder.Code)
 	}
 
 	if !strings.Contains(recorder.Body.String(), "Custom 404 Error") {
 		t.Errorf("Expected custom error content, got %s", recorder.Body.String())
+	}
+
+	// Headers are stamped before ServeContent calls WriteHeader, so they
+	// actually reach the client, and an error body is never cached.
+	if got := recorder.Header().Get("Cache-Control"); got != "no-store" {
+		t.Errorf("Expected Cache-Control no-store on the error page, got %q", got)
+	}
+	if got := recorder.Header().Get("Last-Modified"); got != "" {
+		t.Errorf("Expected no Last-Modified validator on the error page, got %q", got)
 	}
 }
 
