@@ -90,7 +90,25 @@ func (s *S3FS) Open(name string) (http.File, error) {
 		}
 		return nil, &os.PathError{Op: "open", Path: name, Err: os.ErrNotExist}
 	}
-	return s.object(key)
+
+	if f, err := s.object(key); err == nil {
+		return f, nil
+	}
+
+	// A BARE DIRECTORY PATH IS STILL A DIRECTORY. `/auth/callback` names the same
+	// place as `/auth/callback/`, and every other static host resolves it — which
+	// is why an OAuth redirect_uri is written without the slash, and why one
+	// written that way 404'd here while the slashed form served.
+	//
+	// Serving the index directly rather than redirecting keeps the request a
+	// single round trip and cannot break assets: a static export addresses its
+	// own by absolute path.
+	for _, idx := range s.index {
+		if f, err := s.object(key + "/" + idx); err == nil {
+			return f, nil
+		}
+	}
+	return nil, &os.PathError{Op: "open", Path: name, Err: os.ErrNotExist}
 }
 
 // object fetches one key, or reports it absent.
