@@ -127,8 +127,21 @@ func (h *Handler) GetTracingInformation() (string, string) {
 	return h.name, "Static"
 }
 
-// ServeHTTP serves HTTP requests with static files.
+// ServeHTTP serves HTTP requests with static files, encoding the response when
+// the client accepts it. Negotiation wraps every path below — stored files,
+// directory listings, the SPA index and the error page — so there is one place
+// in this server that decides how bytes reach the wire, and a path added later
+// cannot forget to.
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if acceptsGzip(r) {
+		gw := &gzipWriter{ResponseWriter: w}
+		defer gw.close()
+		w = gw
+	}
+	h.serve(w, r)
+}
+
+func (h *Handler) serve(w http.ResponseWriter, r *http.Request) {
 	upath := r.URL.Path
 	if !strings.HasPrefix(upath, "/") {
 		upath = "/" + upath
