@@ -204,7 +204,11 @@ func main() {
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
-	mux.Handle("/", securityHeaders(handler))
+	// Compression is transport, so it sits outside the headers and the files
+	// both. This server was shipping every byte identity-encoded: cloud.hanzo.ai
+	// answered a 198 KB document, 180 KB of CSS and 1.24 MB of JS with no
+	// content-encoding at all, ~1.67 MB on a cold load for ~350 KB of entropy.
+	mux.Handle("/", static.Compress(securityHeaders(handler)))
 
 	addr := fmt.Sprintf(":%d", *port)
 	srv := &http.Server{

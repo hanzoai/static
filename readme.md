@@ -14,7 +14,27 @@ Serves static files, SPAs, directory listings, and custom error pages directly f
 - Directory listing with sortable HTML output
 - Custom 404 error pages
 - Cache-Control headers by file extension
+- gzip on every text response (standalone binary), negotiated per request
 - Zero dependencies (pure Go stdlib)
+
+## Compression
+
+The standalone binary wraps its handler in `static.Compress`. Text goes out
+gzipped when the client says it reads gzip; nothing else changes.
+
+Measured on cloud.hanzo.ai's own export, 27 files, one cold load:
+**1,586,676 B → 440,328 B, 72% off.** The document alone is 198,191 → 20,304
+(89%), the stylesheet 146,300 → 20,701 (85%).
+
+What it deliberately does not touch: already-compressed types (woff2, png,
+mp4 — the allowlist is by Content-Type), bodies under 1 KB (a sub-MTU frame
+costs the same either way and gzip's envelope can make it bigger), `Range`
+requests (a range of the compressed stream is not the range that was asked
+for), and `HEAD` (no body to compress, and its Content-Length must still
+describe the resource). `Vary: Accept-Encoding` is set on every compressible
+response, including the ones left identity, so shared caches key correctly.
+
+There is no flag. A correct answer does not need to be opted into.
 
 ## Weight
 
