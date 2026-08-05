@@ -70,6 +70,56 @@ func init() {
 	mime.AddExtensionType(".go", "text/x-go")
 }
 
+// immutableCacheControl is the answer for bytes that cannot change.
+const immutableCacheControl = "public, max-age=31536000, immutable"
+
+// contentAddressedPrefixes are directories whose contents are named by a hash OF
+// those contents. The build tool writes the hash into the filename, so the bytes
+// at one of these URLs can never change — a different build produces a different
+// name, and the old name simply stops being referenced. That is the whole
+// argument for `immutable`, and it is why it is claimed HERE and nowhere else.
+var contentAddressedPrefixes = []string{
+	"/_next/static/", // Next.js
+	"/_nuxt/",        // Nuxt
+	"/_astro/",       // Astro
+}
+
+// assetExtensions mark a request for a SUBRESOURCE: the client wants these exact
+// bytes and will hand them to a parser that is not HTML's. A route wants a
+// document, which is what the SPA fallback is for — so this set is what tells the
+// two apart on a miss.
+//
+// ".html" is deliberately absent: that IS a document. ".txt" is absent too, and
+// less obviously — it is genuinely ambiguous (a served text file is as likely as
+// a payload), and TestCustomErrorPage pins the branded page for a missing ".txt".
+var assetExtensions = map[string]bool{
+	".js": true, ".mjs": true, ".cjs": true, ".css": true, ".map": true,
+	".json": true, ".wasm": true,
+	".woff": true, ".woff2": true, ".ttf": true, ".otf": true, ".eot": true,
+	".png": true, ".jpg": true, ".jpeg": true, ".gif": true, ".svg": true,
+	".webp": true, ".avif": true, ".ico": true,
+	".mp4": true, ".webm": true, ".mp3": true, ".ogg": true, ".wav": true,
+}
+
+// isContentAddressed reports whether p names bytes under a content-addressed
+// prefix. It matches the prefix anywhere in the path so that one function serves
+// both spellings a path arrives in: the request URL ("/_next/static/chunks/x.js")
+// and the root-relative path of the file actually being served.
+func isContentAddressed(p string) bool {
+	for _, prefix := range contentAddressedPrefixes {
+		if strings.Contains(p, prefix) {
+			return true
+		}
+	}
+
+	return false
+}
+
+// isAsset reports whether a path asks for a subresource rather than a route.
+func isAsset(urlPath string) bool {
+	return isContentAddressed(urlPath) || assetExtensions[strings.ToLower(path.Ext(urlPath))]
+}
+
 // Handler is a static file server handler.
 type Handler struct {
 	root             http.FileSystem
@@ -134,6 +184,11 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		upath = "/" + upath
 	}
 
+	// servedPath is the root-relative path of the bytes that go out, which is not
+	// always the path that was asked for — see the ".html" sibling just below. It
+	// is what decides cacheability, so it has to track the file, not the request.
+	servedPath := upath
+
 	f, err := h.root.Open(upath)
 	// Clean-URL fallback: an extensionless miss serves its ".html" sibling in
 	// place (no redirect — the clean URL is canonical). This is the static-export
@@ -142,10 +197,31 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if err != nil && os.IsNotExist(err) && !strings.HasSuffix(upath, "/") && path.Ext(upath) == "" {
 		if hf, herr := h.root.Open(upath + ".html"); herr == nil {
 			f, err = hf, nil
+			servedPath = upath + ".html"
 		}
 	}
 	if err != nil {
 		if os.IsNotExist(err) {
+			// A missing ASSET is missing. The fallbacks below both answer with a
+			// document, and a document is the wrong kind of thing entirely when the
+			// client asked for a subresource: the browser hands the HTML to a
+			// JavaScript parser and dies there ("Loading chunk 8846 failed") instead
+			// of taking the clean, retryable 404 the situation actually warrants.
+			//
+			// That is not hypothetical — it is the ChunkLoadError on this estate. A
+			// client holding a document from the previous build asks for that build's
+			// chunk hashes; the deploy retired them; SPA mode answered every one of
+			// those with 200 and the app shell. The status was the lie that made an
+			// ordinary cache miss unrecoverable.
+			//
+			// So this precedes both fallbacks, including the custom error page: a
+			// branded HTML body is no better an answer to a request for a stylesheet,
+			// it is only a more expensive one.
+			if isAsset(upath) {
+				http.NotFound(w, r)
+				return
+			}
+
 			if h.spaMode {
 				h.serveFile(w, r, filepath.Join(h.rootPath, h.spaIndex))
 				return
@@ -226,7 +302,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	h.setCacheHeaders(w, r, d)
+	h.setCacheHeaders(w, servedPath, d)
 
 	name := d.Name()
 	ext := filepath.Ext(name)
@@ -324,7 +400,22 @@ func (h *Handler) serveDirectoryListing(w http.ResponseWriter, r *http.Request, 
 	}
 }
 
-func (h *Handler) setCacheHeaders(w http.ResponseWriter, _ *http.Request, d fs.FileInfo) {
+// setCacheHeaders writes the cache policy for servedPath, the root-relative path
+// of the bytes going out.
+func (h *Handler) setCacheHeaders(w http.ResponseWriter, servedPath string, d fs.FileInfo) {
+	// A content-addressed asset is immutable, and says so ahead of any override.
+	// Its name is a hash of its bytes, so the file at this URL cannot change and a
+	// revalidation cannot learn anything: it is pure cost, and worse, pure risk —
+	// a conditional request that lands after a deploy retired the hash turns a
+	// warm cache into a hard failure. The override configures the MUTABLE files;
+	// this is not a policy question, so it is not the override's to answer.
+	if isContentAddressed(servedPath) {
+		w.Header().Set("Cache-Control", immutableCacheControl)
+		w.Header().Set("Last-Modified", d.ModTime().UTC().Format(http.TimeFormat))
+
+		return
+	}
+
 	ext := filepath.Ext(d.Name())
 
 	if maxAge, ok := h.cacheControl[ext]; ok {
@@ -390,7 +481,7 @@ func (h *Handler) serveFile(w http.ResponseWriter, r *http.Request, filePath str
 		return
 	}
 
-	h.setCacheHeaders(w, r, d)
+	h.setCacheHeaders(w, h.servedPath(filePath), d)
 
 	ext := filepath.Ext(d.Name())
 	contentType := mime.TypeByExtension(ext)
@@ -399,6 +490,23 @@ func (h *Handler) serveFile(w http.ResponseWriter, r *http.Request, filePath str
 	}
 
 	http.ServeContent(w, r, d.Name(), d.ModTime(), f)
+}
+
+// servedPath turns the filesystem path of the bytes being served back into the
+// root-relative path they answer to.
+//
+// The cache policy has to follow the FILE, not the request. The SPA fallback
+// answers a route with index.html, so a request for a retired chunk would
+// otherwise look content-addressed and freeze the app shell under that URL for a
+// year — the failure this whole change exists to remove, reintroduced by keying
+// on the wrong path.
+func (h *Handler) servedPath(filePath string) string {
+	rel := strings.TrimPrefix(filepath.ToSlash(filePath), filepath.ToSlash(h.rootPath))
+	if !strings.HasPrefix(rel, "/") {
+		rel = "/" + rel
+	}
+
+	return rel
 }
 
 func localRedirect(w http.ResponseWriter, r *http.Request, newPath string) {
