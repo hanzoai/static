@@ -422,11 +422,41 @@ func (h *Handler) setCacheHeaders(w http.ResponseWriter, servedPath string, d fs
 		w.Header().Set("Cache-Control", maxAge)
 	} else if maxAge, ok := h.cacheControl["*"]; ok {
 		w.Header().Set("Cache-Control", maxAge)
+	} else if isDocument(ext) {
+		// The mirror image of the immutable case above. A document is served at a
+		// URL that never changes, so a cached one hides everything a deploy did:
+		// the asset hashes it references AND every response header sent with it.
+		//
+		// Measured on pay.hanzo.ai — a browser went on enforcing the PREVIOUS
+		// Content-Security-Policy out of cache while curl showed the new one, so a
+		// header fix was live at the origin and applied to nobody who had visited
+		// before. At the old blanket max-age that lasted a day, and a deploy which
+		// reaches nobody for a day is indistinguishable from one that failed.
+		//
+		// no-cache does NOT mean do-not-store: the response is still cached and
+		// revalidation is conditional, so an unchanged document answers 304 with no
+		// body. One round trip, against a day of staleness.
+		w.Header().Set("Cache-Control", "no-cache")
 	} else {
 		w.Header().Set("Cache-Control", "max-age=86400")
 	}
 
 	w.Header().Set("Last-Modified", d.ModTime().UTC().Format(http.TimeFormat))
+}
+
+// isDocument reports whether an extension names an entry point served at a
+// stable URL — the class whose staleness hides a deploy.
+//
+// Assets are excluded even when they are text: a .js or .css is normally
+// content-hashed, and isContentAddressed above has already claimed those. This
+// only decides the default for files nobody configured.
+func isDocument(ext string) bool {
+	switch strings.ToLower(ext) {
+	case ".html", ".htm", "":
+		return true
+	}
+
+	return false
 }
 
 // serveErrorPage writes a custom error page with the status it stands for.

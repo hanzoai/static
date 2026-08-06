@@ -552,3 +552,101 @@ func TestS3BareDirectoryPathResolves(t *testing.T) {
 		}
 	}
 }
+// A document must not outlive its deploy.
+//
+// The default used to be a blanket max-age=86400, which put an HTML entry point
+// — a URL that never changes — in a browser cache for a day. Everything a deploy
+// alters travels with that document: the asset hashes it references AND every
+// response header served alongside it. Measured on pay.hanzo.ai, a browser went
+// on enforcing the PREVIOUS Content-Security-Policy from cache while curl showed
+// the new one, so a header fix was live and still did not apply. A deploy that
+// reaches nobody for 24h cannot be told apart from one that failed.
+//
+// Assets are the opposite case and are deliberately left alone: they are
+// content-hashed, so a change to the bytes changes the URL, and caching them
+// hard is the entire point.
+func TestDefaultCacheControl_DocumentsRevalidate_AssetsDoNot(t *testing.T) {
+	t.Parallel()
+
+	tempDir, err := os.MkdirTemp("", "static-cache-default")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	for name, body := range map[string]string{
+		"index.html": "<html></html>",
+		"page.htm":   "<html></html>",
+		"app.js":     "export {}",
+		"app.css":    "body {}",
+	} {
+		if err := os.WriteFile(filepath.Join(tempDir, name), []byte(body), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// NO CacheControl configured — this is the default path, which is the one
+	// every site gets until somebody thinks about it.
+	cfg := static.CreateConfig()
+	cfg.Root = tempDir
+
+	handler, err := static.New(context.Background(), next(t), cfg, "static")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, tc := range []struct{ path, want, why string }{
+		{"/index.html", "no-cache", "an HTML entry point carries the deploy; a stale one hides it"},
+		{"/page.htm", "no-cache", ".htm is the same class of file as .html"},
+		{"/app.js", "max-age=86400", "hashed assets are content-addressed and must stay cacheable"},
+		{"/app.css", "max-age=86400", "hashed assets are content-addressed and must stay cacheable"},
+	} {
+		recorder := httptest.NewRecorder()
+		req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, "http://localhost"+tc.path, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		handler.ServeHTTP(recorder, req)
+
+		if got := recorder.Header().Get("Cache-Control"); got != tc.want {
+			t.Errorf("%s: Cache-Control = %q, want %q — %s", tc.path, got, tc.want, tc.why)
+		}
+	}
+}
+
+// An explicit policy still wins over the default, in both directions. Without
+// this, "documents revalidate" could silently become unoverridable, and a site
+// that has deliberately chosen to cache its HTML would stop being able to.
+func TestExplicitCacheControlOverridesTheDocumentDefault(t *testing.T) {
+	t.Parallel()
+
+	tempDir, err := os.MkdirTemp("", "static-cache-override")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	if err := os.WriteFile(filepath.Join(tempDir, "index.html"), []byte("<html></html>"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := static.CreateConfig()
+	cfg.Root = tempDir
+	cfg.CacheControl = map[string]string{".html": "max-age=60"}
+
+	handler, err := static.New(context.Background(), next(t), cfg, "static")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	recorder := httptest.NewRecorder()
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, "http://localhost/index.html", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler.ServeHTTP(recorder, req)
+
+	if got := recorder.Header().Get("Cache-Control"); got != "max-age=60" {
+		t.Errorf("Cache-Control = %q, want max-age=60 — an explicit policy must beat the default", got)
+	}
+}
