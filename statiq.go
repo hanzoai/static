@@ -42,6 +42,11 @@ type Config struct {
 
 	// CacheControl sets cache control headers for static files.
 	CacheControl map[string]string `json:"cacheControl,omitempty"`
+
+	// Key is the site's publishable key (pk-…). Every document this server sends
+	// goes out carrying the Hanzo tag stamped with it; without one, no tag is
+	// injected. See tag.go.
+	Key string `json:"key,omitempty"`
 }
 
 // CreateConfig creates the default plugin configuration.
@@ -130,6 +135,7 @@ type Handler struct {
 	spaIndex         string
 	errorPage404     string
 	cacheControl     map[string]string
+	key              string
 	name             string
 }
 
@@ -168,6 +174,7 @@ func New(ctx context.Context, next http.Handler, config *Config, name string) (h
 		spaIndex:         config.SPAIndex,
 		errorPage404:     config.ErrorPage404,
 		cacheControl:     config.CacheControl,
+		key:              config.Key,
 		name:             name,
 	}, nil
 }
@@ -311,7 +318,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", contentType)
 	}
 
-	http.ServeContent(w, r, d.Name(), d.ModTime(), f.(io.ReadSeeker))
+	http.ServeContent(w, r, d.Name(), d.ModTime(), h.body(w, f.(io.ReadSeeker), d.Size(), contentType))
 }
 
 func (h *Handler) serveDirectoryListing(w http.ResponseWriter, r *http.Request, f http.File, d fs.FileInfo) {
@@ -487,14 +494,27 @@ func (h *Handler) serveErrorPage(w http.ResponseWriter, filePath string) {
 	}
 	defer f.Close()
 
-	if ct := mime.TypeByExtension(filepath.Ext(filePath)); ct != "" {
+	d, err := f.Stat()
+	if err != nil {
+		http.Error(w, "404 page not found", http.StatusNotFound)
+		return
+	}
+
+	ct := mime.TypeByExtension(filepath.Ext(filePath))
+	if ct != "" {
 		w.Header().Set("Content-Type", ct)
 	}
 	// Never cached as if it were the resource that was asked for: the same URL may
 	// exist tomorrow, and a cached 404 would outlive the mistake.
 	w.Header().Set("Cache-Control", "no-store")
+
+	// The error page is a document the site serves, so it carries the tag like any
+	// other. A pageview on a 404 is worth more than one on a hit: it is the only
+	// way a broken link anywhere on the web reports itself.
+	body := h.body(w, f, d.Size(), ct)
+
 	w.WriteHeader(http.StatusNotFound)
-	_, _ = io.Copy(w, f)
+	_, _ = io.Copy(w, body)
 }
 
 func (h *Handler) serveFile(w http.ResponseWriter, r *http.Request, filePath string) {
@@ -519,7 +539,7 @@ func (h *Handler) serveFile(w http.ResponseWriter, r *http.Request, filePath str
 		w.Header().Set("Content-Type", contentType)
 	}
 
-	http.ServeContent(w, r, d.Name(), d.ModTime(), f)
+	http.ServeContent(w, r, d.Name(), d.ModTime(), h.body(w, f, d.Size(), contentType))
 }
 
 // servedPath turns the filesystem path of the bytes being served back into the

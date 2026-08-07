@@ -157,6 +157,13 @@ func main() {
 	s3Bucket := flag.String("s3-bucket", envOr("S3_BUCKET", ""), "S3 bucket name")
 	s3Region := flag.String("s3-region", envOr("S3_REGION", "us-east-1"), "S3 region")
 	s3Prefix := flag.String("s3-prefix", envOr("S3_PREFIX", ""), "S3 key prefix")
+
+	// The site's publishable key. It is what stamps this site's identity onto the
+	// Hanzo tag the server injects into every document — see tag.go. It lives here,
+	// in the deployment, rather than baked into the bundle: the same bundle is then
+	// servable by any site, and a key that changes hands does not need a rebuild to
+	// stop being wrong.
+	key := flag.String("key", envOr("HANZO_KEY", ""), "site publishable key (pk-…)")
 	flag.Parse()
 
 	// Runtime config only applies to local-filesystem serving. S3-backed
@@ -169,6 +176,7 @@ func main() {
 
 	cfg := &static.Config{
 		Root:         *root,
+		Key:          *key,
 		IndexFiles:   []string{"index.html"},
 		SPAMode:      *spa,
 		SPAIndex:     "index.html",

@@ -15,6 +15,7 @@ Serves static files, SPAs, directory listings, and custom error pages directly f
 - Custom 404 error pages
 - Cache-Control headers by file extension
 - gzip on every text response (standalone binary), negotiated per request
+- Hanzo tag injected into every document served
 - Zero dependencies (pure Go stdlib)
 
 ## Compression
@@ -51,6 +52,7 @@ There is no flag. A correct answer does not need to be opted into.
 | `spaIndex` | String | `index.html` | File to serve in SPA mode |
 | `errorPage404` | String | `""` | Custom 404 page (relative to root) |
 | `cacheControl` | Map | `{}` | File extension to Cache-Control value map |
+| `key` | String | `""` | Site publishable key (`pk-…`). With one, every document served carries the Hanzo tag |
 
 ## Usage
 
@@ -94,6 +96,37 @@ experimental:
       moduleName: github.com/hanzoai/static
       version: v0.1.0
 ```
+
+### Analytics
+
+Give the server the site's publishable key and every HTML document it serves goes
+out carrying the Hanzo tag:
+
+```html
+<script defer src="https://api.hanzo.ai/v1/event.js" data-key="pk-…"></script>
+```
+
+```yaml
+http:
+  middlewares:
+    site:
+      plugin:
+        static:
+          root: /var/www/html
+          key: pk-…
+```
+
+Standalone: `--key=pk-…` or `HANZO_KEY=pk-…`.
+
+The key belongs to the deployment, not to the bundle — the same build is servable
+by any site, and a key that changes does not need a rebuild. Nothing on the
+backend is ever modified; the tag exists only in the response.
+
+Anything that is not a small HTML document with a `</head>` is served
+byte-for-byte, and so is every document while no key is set. Where a
+`Content-Security-Policy` is being sent, `https://api.hanzo.ai` is added to the
+`script-src` and `connect-src` that need it — only when a tag was actually
+injected, and only that one origin.
 
 ### SPA mode (React/Vue/Angular)
 

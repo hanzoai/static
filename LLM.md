@@ -27,6 +27,28 @@ If no `SPA_*` vars are set the placeholder `config.json` in the image is left un
 
 Why at startup: deterministic ordering, one shot, no sidecar, no shell, no race with the HTTP server. Works in `FROM scratch` because the writer is Go.
 
+## The tag
+
+Every HTML document the server sends carries the Hanzo tag, stamped with the
+site's publishable key (`key` in the plugin config; `--key` / `HANZO_KEY` for the
+standalone binary). No key, no tag. `tag.go`.
+
+The key lives in the DEPLOYMENT, not in the bundle. Baking it at build time is
+what let the `hanzo.ai` apex serve a copy carrying no key at all, and `www`
+0.1.15 serve one whose project had been deleted — a rebuild was the only way to
+fix either.
+
+Fail-safe by construction: only `text/html` under 1 MB with a `</head>` is
+touched, the bytes are returned unchanged on every other path, a key that is not
+`pk-` or is not attribute-safe injects nothing, and the file on the backend is
+never modified.
+
+`admit` adds `https://api.hanzo.ai` to the `script-src`/`connect-src` of the
+policy the response is already carrying, and only when a tag went in. Without it
+the tag is inert on 22 of the 23 sites this image serves: their CSPs name
+api.hanzo.ai in `connect-src` for `/v1/event` but not in `script-src`, so the
+script never loads.
+
 ## Tests
 
 ```bash
