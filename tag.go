@@ -193,11 +193,17 @@ func admit(h http.Header) {
 	}
 
 	parts := strings.Split(policy, ";")
+
+	// Where each directive is FIRST declared. A repeated one is ignored by the
+	// browser after its first appearance, so amending a later copy would allow
+	// nothing while reading as though it had.
 	at := make(map[string]int, len(parts))
 	for i, p := range parts {
-		if name := strings.ToLower(directive(p)); name != "" {
-			at[name] = i
+		name := strings.ToLower(directive(p))
+		if _, seen := at[name]; name == "" || seen {
+			continue
 		}
+		at[name] = i
 	}
 
 	changed := false

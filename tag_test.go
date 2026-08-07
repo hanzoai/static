@@ -188,6 +188,13 @@ func TestAdmit(t *testing.T) {
 		{"allowed by scheme", "default-src https:", "default-src https:"},
 		{"allowed by star", "script-src *; connect-src *", "script-src *; connect-src *"},
 		{"a wildcard that only ends in the same letters does not cover", "script-src https://*.evilhanzo.ai; connect-src *", "script-src https://*.evilhanzo.ai https://api.hanzo.ai; connect-src *"},
+		{
+			// A repeated directive: the FIRST occurrence governs and the rest are
+			// ignored, so amending a later one would allow nothing.
+			"a repeated directive is amended where it counts",
+			"script-src 'self'; connect-src *; script-src https://elsewhere",
+			"script-src 'self' https://api.hanzo.ai; connect-src *; script-src https://elsewhere",
+		},
 		{"no policy", "", ""},
 		{"blank parts do not panic", " ; ;; ", " ; ;; "},
 	} {
