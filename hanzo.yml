@@ -1,0 +1,13 @@
+# Canonical CI config for hanzoai/static — read by platform.hanzo.ai (the forge
+# system webhook, which schedules one BuildKit Job per declared image on a push)
+# and the hanzoai/ci reusable. Without this file the lane answers "declares no
+# image to build" and nothing ships, which is why v0.5.6–v0.5.9 built no image.
+#
+# One image: the scratch-based Go edge server (cmd/static) that fronts every
+# hanzoai static site. A main push builds ghcr.io/hanzoai/static:sha-<sha7>; a v*
+# tag builds the bare semver. Pin site values files to the sha or the semver.
+images:
+  - name: static
+    context: .
+    dockerfile: Dockerfile
+    repo: ghcr.io/hanzoai/static
