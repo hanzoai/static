@@ -6,6 +6,11 @@
 # One image: the scratch-based Go edge server (cmd/static) that fronts every
 # hanzoai static site. A main push builds ghcr.io/hanzoai/static:sha-<sha7>; a v*
 # tag builds the bare semver. Pin site values files to the sha or the semver.
+#
+# source: forge — this repo is forge-primary. The GitHub original moved to a
+# private org, so the builder's default context github.com/hanzoai/static no
+# longer exists; the canonical tree is git.hanzo.ai/hanzoai/static.
+source: forge
 images:
   - name: static
     context: .
