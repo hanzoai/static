@@ -11,8 +11,8 @@ import (
 	"strings"
 	"time"
 
-	s3 "github.com/hanzos3/go-sdk"
-	"github.com/hanzos3/go-sdk/pkg/credentials"
+	s3 "github.com/hanzos3/go"
+	"github.com/hanzos3/go/pkg/credentials"
 )
 
 const maxObjectSize = 50 << 20 // 50 MB
