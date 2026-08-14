@@ -1,6 +1,6 @@
 # Canonical CI config for hanzoai/static — read by platform.hanzo.ai (the forge
 # system webhook, which schedules one BuildKit Job per declared image on a push)
-# and the hanzoai/ci reusable. Without this file the lane answers "declares no
+# and the hanzoai/ci reusable that .hanzo/workflows/cicd.yml imports. Without this file the lane answers "declares no
 # image to build" and nothing ships, which is why v0.5.6–v0.5.9 built no image.
 #
 # One image: the scratch-based Go edge server (cmd/static) that fronts every
@@ -16,3 +16,25 @@ images:
     context: .
     dockerfile: Dockerfile
     repo: ghcr.io/hanzoai/static
+
+# cmd/static is an edge server that fronts every hanzoai static site, and until
+# now it shipped with nothing asserting it compiles: the image lane was the only
+# lane, so a build failure and a test failure were the same event, discovered at
+# the same time, by the same person — at deploy.
+#
+# This is the linux half of the go-cross matrix that used to live in
+# .github/workflows. That matrix ran ubuntu, macOS and windows against Go 1.22
+# and 1.x; the fleet is linux/amd64 containers, so the other five legs had no
+# runner. They were not covering anything either — on GitHub the same workflow
+# failed 28 of its last 33 runs.
+#
+# CGO_ENABLED=0 because that is how the Dockerfile builds it: the image is
+# scratch-based and a cgo binary would not run in it, so a gate built any other
+# way is not gating the artifact.
+test:
+  - name: test
+    run: |
+      set -euo pipefail
+      CGO_ENABLED=0 go build ./...
+      CGO_ENABLED=0 go vet ./...
+      CGO_ENABLED=0 go test -cover ./...
