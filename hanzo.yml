@@ -16,6 +16,14 @@ images:
     context: .
     dockerfile: Dockerfile
     repo: ghcr.io/hanzoai/static
+    # Two architectures, one manifest list. This server fronts every hanzoai
+    # static site, so it is the base layer under a large part of the estate:
+    # when it ships amd64 only, every site built on it is unschedulable on an
+    # arm64 node, and the kubelet's complaint names the base image rather than
+    # the site — "no match for platform in manifest". 0.4.1 was multi-arch and
+    # the series lost arm64 when the build lane moved to a single amd64 runner,
+    # so this line is what stops it being lost again.
+    platforms: [linux/amd64, linux/arm64]
 
 # cmd/static is an edge server that fronts every hanzoai static site, and until
 # now it shipped with nothing asserting it compiles: the image lane was the only
