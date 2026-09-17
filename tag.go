@@ -244,15 +244,15 @@ func admit(h http.Header) {
 // list — once one origin is allowed it is no longer the whole of anything, and
 // leaving it in writes a policy that reads as a contradiction.
 func allow(part string) string {
-	out := ""
+	var out strings.Builder
 	for _, src := range list(part) {
 		if src == "'none'" {
 			continue
 		}
-		out += " " + src
+		out.WriteString(" " + src)
 	}
 
-	return out + " " + tagOrigin
+	return out.String() + " " + tagOrigin
 }
 
 // lead returns the whitespace a policy part starts with, so rewriting one does

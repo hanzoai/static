@@ -21,13 +21,13 @@ const maxObjectSize = 50 << 20 // 50 MB
 type S3Config struct {
 	// IndexFiles tried for a directory request; defaults to index.html/index.htm.
 	IndexFiles []string `json:"indexFiles,omitempty"`
-	Endpoint  string `json:"endpoint,omitempty"`  // S3 endpoint (e.g. s3:9000)
-	Bucket    string `json:"bucket,omitempty"`    // Bucket name
-	Region    string `json:"region,omitempty"`    // Region (default us-east-1)
-	AccessKey string `json:"accessKey,omitempty"` // Access key ID
-	SecretKey string `json:"secretKey,omitempty"` // Secret access key
-	Prefix    string `json:"prefix,omitempty"`    // Key prefix
-	UseSSL    bool   `json:"useSSL,omitempty"`    // Use HTTPS
+	Endpoint   string   `json:"endpoint,omitempty"`  // S3 endpoint (e.g. s3:9000)
+	Bucket     string   `json:"bucket,omitempty"`    // Bucket name
+	Region     string   `json:"region,omitempty"`    // Region (default us-east-1)
+	AccessKey  string   `json:"accessKey,omitempty"` // Access key ID
+	SecretKey  string   `json:"secretKey,omitempty"` // Secret access key
+	Prefix     string   `json:"prefix,omitempty"`    // Key prefix
+	UseSSL     bool     `json:"useSSL,omitempty"`    // Use HTTPS
 }
 
 // S3FS implements http.FileSystem backed by S3-compatible s3.
@@ -176,4 +176,4 @@ func (i *s3FileInfo) Size() int64        { return i.size }
 func (i *s3FileInfo) Mode() fs.FileMode  { return 0444 }
 func (i *s3FileInfo) ModTime() time.Time { return i.mod }
 func (i *s3FileInfo) IsDir() bool        { return false }
-func (i *s3FileInfo) Sys() interface{}   { return nil }
+func (i *s3FileInfo) Sys() any           { return nil }

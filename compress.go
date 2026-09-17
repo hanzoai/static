@@ -46,12 +46,12 @@ func compressible(ct string) bool {
 // it with `gzip;q=0`. A bare substring test says yes to "gzip;q=0", which is the
 // one spelling that means no.
 func acceptsGzip(h string) bool {
-	for _, part := range strings.Split(h, ",") {
+	for part := range strings.SplitSeq(h, ",") {
 		name, params, _ := strings.Cut(strings.TrimSpace(part), ";")
 		if !strings.EqualFold(strings.TrimSpace(name), "gzip") {
 			continue
 		}
-		for _, p := range strings.Split(params, ";") {
+		for p := range strings.SplitSeq(params, ";") {
 			k, v, ok := strings.Cut(strings.TrimSpace(p), "=")
 			if ok && strings.EqualFold(strings.TrimSpace(k), "q") && strings.TrimSpace(v) == "0" {
 				return false
